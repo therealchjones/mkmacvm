@@ -1,0 +1,85 @@
+#!/bin/sh
+
+set -e
+
+echo Getting script directory...
+SCRIPTDIR="${0%/*}"
+echo Script directory is "$SCRIPTDIR"
+
+echo Getting configuration...
+if [ ! -r "${SCRIPTDIR}/config.sh" ]; then
+	echo "Configuration file '${SCRIPTDIR}/config.sh' not found." >&2
+	exit 1
+fi
+
+# This configuration file is only present during the creation and
+# installation process; disable shellcheck here to prevent complaints
+# about it.
+# shellcheck disable=SC1090,SC1091
+. "${SCRIPTDIR}/config.sh"
+if [ -z "$USERNAME" ]; then
+	echo "Configuration file does not include username. Exiting." >&2
+	exit 1
+fi
+if [ -z "$SHADOW" ]; then
+	echo "Configuration file does not include user settings. Exiting." >&2
+	exit 1
+fi
+
+# This next step requires 'createuser' from the pyusercreatepkg project
+# and an appropriate plist-formatted user configuration to work
+# properly.
+echo Creating user "'$USERNAME'"...
+"$SCRIPTDIR"/createuser "$SCRIPTDIR/$USERNAME.plist"
+
+echo Adding "$USERNAME" to admin group...
+dseditgroup -o edit -a "$USERNAME" -t user admin
+
+echo Creating home directories..
+createhomedir -c -u "$USERNAME"
+
+USER_HOME=/Users/"$USERNAME"
+if [ ! -d "$USER_HOME" ]; then
+	echo Home directory "'$USER_HOME'" not created. Exiting. >&2
+	exit 1
+fi
+
+echo Looking for SSH keys...
+if [ -r "$SCRIPTDIR"/id_ecdsa.pub ]; then
+	echo Installing SSH keys...
+	USER_SSH="$USER_HOME"/.ssh
+	mkdir -p "$USER_SSH"
+	cp "$SCRIPTDIR"/id_ecdsa.pub "$USER_SSH"/authorized_keys
+	chmod 0600 "$USER_SSH"/authorized_keys
+	chmod 0700 "$USER_SSH"
+	chown -R "$USERNAME" "$USER_SSH"
+fi
+
+echo Starting the SSH server...
+/bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+
+echo Disabling setup assistant...
+/usr/bin/touch /private/var/db/.AppleSetupDone
+
+mkdir -p "${USER_HOME}"/Library/Preferences
+SETUPPREFS="${USER_HOME}"/Library/Preferences/com.apple.SetupAssistant
+for setting in DidSeeApplePaySetup DidSeeAvatarSetup DidSeeCloudSetup DidSeeiCloudLoginForStorageServices DidSeePrivacy DidSeeSiriSetup DidSeeSyncSetup DidSeeSyncSetup2 DidSeeTouchIDSetup DidSeeAppearanceSetup DidSeeTrueTone DidSeeActivationLock DidSeeScreenTime DidSeeAccessibility DidSeeAppStore; do
+	defaults write "$SETUPPREFS" "$setting" -bool true
+done
+defaults write "$SETUPPREFS" LastSeenBuddyBuildVersion -string "$(sw_vers -buildVersion)"
+for setting in LastSeenCloudProductVersion LastSeeniCloudStorageServicesProductVersion LastSeenSyncProductVersion LastSeenDiagnosticsProductVersion LastSeenSiriProductVersion; do
+	defaults write "$SETUPPREFS" "$setting" -string "$(sw_vers -productVersion)"
+done
+chown "$USERNAME" "${USER_HOME}/Library/Preferences"
+chown "$USERNAME" "$SETUPPREFS".plist
+
+echo Updating macOS...
+# apparently need to get network up first
+/usr/sbin/softwareupdate -i -a
+
+echo Ejecting installation disk...
+# this probably needs to be dynamic, also it's not working
+hdiutil detach "/Volumes/Install macOS Monterey"
+
+echo Shutting down.
+/sbin/shutdown -h now

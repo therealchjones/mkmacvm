@@ -1,0 +1,197 @@
+#!/bin/sh
+
+set -e
+
+MACOS_VERSION="12.1"
+VM_NAME="macOS"
+
+INSTALLERAPP_PATH="/Applications/Install macOS Monterey.app"
+CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
+INSTALLER_VOLUME="/Volumes/Install macOS Monterey"
+
+if [ "0" != "$(id -u)" ]; then
+	echo "$0 requires administrator privileges for several portions." >&2
+	echo "Run as 'sudo \"$0\"'." >&2
+	exit 1
+fi
+
+if [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
+	echo "$0 should be used by a regular user under 'sudo'; don't run" >&2
+	echo "as root directly. Run as 'sudo \"$0\"'." >&2
+	exit 1
+fi
+USERNAME="$SUDO_USER"
+
+# prlctl must be run as the end user, not sudo/root
+if sudo -u "$SUDO_USER" prlctl list "$VM_NAME" >/dev/null 2>&1; then
+	echo "A virtual machine named '$VM_NAME' already exists. That" >&2
+	echo "make things confusing. Remove or rename that virtual machine," >&2
+	echo "then try $0 again." >&2
+	exit 1
+fi
+if pgrep osinstallersetupd >/dev/null; then
+	echo "A macOS installer is running. That makes things confusing." >&2
+	echo "Close the installer (or run 'killall osinstallersetupd'), then" >&2
+	echo "try $0 again." >&2
+	exit 1
+fi
+if mount | grep " on $INSTALLER_VOLUME " >/dev/null; then
+	echo "A drive is already mounted at $INSTALLER_VOLUME." >&2
+	echo "That makes things confusing. Eject the volume mounted there" >&2
+	echo "(or run 'umount \"$INSTALLER_VOLUME\"')," >&2
+	echo "then try $0 again." >&2
+	exit 1
+fi
+
+getInstallerVersion() {
+	if [ -z "$1" ]; then return; fi
+	grep -a -A 1 DTPlatformVersion "$1" \
+		| sed -n -E '2s#^.*>(.*)</.*$#\1#p'
+}
+
+if [ -r "$CREATEINSTALL_PATH" ]; then
+	checkedVersion="$(getInstallerVersion "$CREATEINSTALL_PATH")"
+	if [ "x$MACOS_VERSION" != "x$checkedVersion" ]; then
+		echo 'A macOS installation app for a different macOS version already' >&2
+		echo "exists at $INSTALLERAPP_PATH. That makes things confusing." >&2
+		echo "Move that app somewhere else (or delete it by running" >&2
+		echo "'rm -rf \"$INSTALLERAPP_PATH\"), then try" >&2
+		echo "$0 again." >&2
+		exit 1
+	fi
+else
+	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION"
+	sleep 1
+	if installer_pid="$(pgrep -n osinstallersetupd)"; then
+		installer_path="$(ps -o comm= "$installer_pid")"
+		INSTALLERAPP_PATH="${installer_path%/Contents/Framework/OSInstallerSetup.framework/resources/osinstallersetupd}"
+		CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
+		kill installer_pid
+	fi
+	if ! [ -r "$CREATEINSTALL_PATH" ]; then
+		echo "'createinstallmedia' should be at '$CREATEINSTALL_PATH'," >&2
+		echo "but it couldn't be found. Exiting." >&2
+		exit 1
+	fi
+	checkedVersion="$(getInstallerVersion "$CREATEINSTALL_PATH")"
+	if [ "x$MACOS_VERSION" != "$checkedVersion" ]; then
+		echo "The installer app found at $INSTALLERAPP_PATH" >&2
+		echo "appears to be for macOS version $checkedVersion rather than $MACOS_VERSION." >&2
+		echo "That's pretty confusing. Exiting." >&2
+		exit 1
+	fi
+fi
+INSTALLER_IMAGENAME="$(basename "${INSTALLERAPP_PATH}" ".app")"
+hdiutil create -o "$INSTALLER_IMAGENAME" -size 16g -layout SPUD -fs HFS+J
+hdiutil attach "$INSTALLER_IMAGENAME".dmg -noverify -mountpoint "/Volumes/$INSTALLER_IMAGENAME" -nobrowse
+
+"$CREATEINSTALL_PATH" --volume "/Volumes/$INSTALLER_IMAGENAME" --nointeraction
+
+hashdata="$(dscl -plist . -read /Users/"$USERNAME" ShadowHashData)"
+if ! echo "$hashdata" | plutil -extract 'dsAttrTypeNative:ShadowHashData.0' raw - >/dev/null 2>&1; then
+	echo "Unable to obtain current settings for user '$USERNAME'." >&2
+	exit 1
+fi
+user_hash="$(echo "$hashdata" \
+	| plutil -extract 'dsAttrTypeNative:ShadowHashData.0' raw - \
+	| xxd -p -r \
+	| plutil -extract 'SALTED-SHA512-PBKDF2' xml1 - -o -)"
+user_entropy="$(echo "$user_hash" \
+	| plutil -extract 'entropy' raw -)"
+user_iterations="$(echo "$user_hash" \
+	| plutil -extract 'iterations' raw -)"
+user_salt="$(echo "$user_hash" \
+	| plutil -extract 'salt' raw -)"
+SHADOW="$(plutil -create binary1 - -o - \
+	| plutil -insert 'SALTED-SHA512-PBKDF2' -dictionary - -o - \
+	| plutil -insert 'SALTED-SHA512-PBKDF2.entropy' -data "${user_entropy}" - -o - \
+	| plutil -insert 'SALTED-SHA512-PBKDF2.iterations' -integer "${user_iterations}" - -o - \
+	| plutil -insert 'SALTED-SHA512-PBKDF2.salt' -data "${user_salt}" - -o - \
+	| base64)"
+
+cat >headlessconfig/config.sh <<-EOF
+	#!/bin/sh
+
+	USERNAME="$USERNAME"
+	SHADOW="$SHADOW"
+EOF
+
+cat >"/Volumes/${INSTALLER_IMAGENAME}/install" <<-EOF
+	#!/bin/sh
+
+	"/Volumes/Image Volume/${INSTALLER_IMAGENAME}.app/Contents/Resources/startosinstall" \
+	--agreetolicense --volume "/Volumes/Macintosh HD" \
+	--installpackage "/Volumes/Image Volume/setup-headless-configuration.pkg"
+EOF
+chmod 0755 "/Volumes/${INSTALLER_IMAGENAME}/install"
+
+if [ -r ~/.ssh/id_ecdsa.pub ]; then
+	cp ~/.ssh/id_ecdsa.pub headlessconfig/
+fi
+
+pkgbuild --nopayload --scripts headlessconfig/ --identifier \
+	headless-configuration headless-configuration.pkg
+productbuild --package headless-configuration.pkg \
+	setup-headless-configuration.pkg
+cp setup-headless-configuration.pkg "$INSTALLER_VOLUME"
+
+hdiutil detach "$INSTALLER_VOLUME"
+chown "$USERNAME" "$INSTALLER_IMAGENAME".dmg
+
+# The VM can only be seen and modified by the creating
+# user. so all prlctl commands must be done via "reverse sudo"
+sudo -u "$USERNAME" prlctl create "$VM_NAME" -o macos
+sudo -u "$USERNAME" prlctl set "$VM_NAME" --cpus auto --memsize auto \
+	--auto-share-camera off \
+	--nested-virt on \
+	--smart-mount off --shared-cloud off \
+	--sh-app-guest-to-host off \
+	--sh-app-host-to-guest off \
+	--startup-view window \
+	--adaptive-hypervisor on
+sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set "cdrom0" --image "$INSTALLER_IMAGENAME".dmg --connect
+osascript -e 'tell application "Parallels Desktop" to activate'
+sudo -u "$USERNAME" prlctl start "$VM_NAME"
+
+#
+# Please see also https://github.com/therealchjones/mkmacvm/blob/main/LICENSE
+#
+# Copyright 2019 Twocanoes Software, Inc
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not
+# use this source code except in compliance with the License. You may obtain a
+# copy of the License at
+#
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations under
+# the License.
