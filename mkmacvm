@@ -1,45 +1,61 @@
 #!/bin/sh
 
-set -e
-
-MACOS_VERSION="12.1"
+MACOS_VERSION="12.2"
 VM_NAME="macOS"
+
+DEBUG="${DEBUG:-}"
+VERBOSE="${VERBOSE:-}"
+DEBUGOUT=/dev/null
+VERBOSEOUT=/dev/null
+if [ -n "$DEBUG" ]; then
+	set -x
+	DEBUGOUT=/dev/stdout
+	echo "Enabled debugging output" >"$DEBUGOUT"
+	VERBOSE=yes
+	set -e
+fi
+if [ -n "$VERBOSE" ]; then
+	VERBOSEOUT=/dev/stdout
+fi
 
 INSTALLERAPP_PATH="/Applications/Install macOS Monterey.app"
 CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
 INSTALLER_VOLUME="/Volumes/Install macOS Monterey"
 
+PROGRAMNAME="$(basename "$0")"
+
 if [ "0" != "$(id -u)" ]; then
-	echo "$0 requires administrator privileges for several portions." >&2
+	echo "$PROGRAMNAME requires administrator privileges for several portions." >&2
 	echo "Run as 'sudo \"$0\"'." >&2
 	exit 1
 fi
 
 if [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
-	echo "$0 should be used by a regular user under 'sudo'; don't run" >&2
+	echo "$PROGRAMNAME should be used by a regular user under 'sudo'; don't run" >&2
 	echo "as root directly. Run as 'sudo \"$0\"'." >&2
 	exit 1
 fi
 USERNAME="$SUDO_USER"
+USERREALNAME="$(id -F "$USERNAME")"
 
 # prlctl must be run as the end user, not sudo/root
 if sudo -u "$SUDO_USER" prlctl list "$VM_NAME" >/dev/null 2>&1; then
 	echo "A virtual machine named '$VM_NAME' already exists. That" >&2
 	echo "make things confusing. Remove or rename that virtual machine," >&2
-	echo "then try $0 again." >&2
+	echo "then try $PROGRAMNAME again." >&2
 	exit 1
 fi
-if pgrep osinstallersetupd >/dev/null; then
-	echo "A macOS installer is running. That makes things confusing." >&2
-	echo "Close the installer (or run 'killall osinstallersetupd'), then" >&2
-	echo "try $0 again." >&2
+if pgrep osinstallersetupd >/dev/null || pgrep InstallAssistant >/dev/null; then
+	echo "Another installer is running. That makes things confusing." >&2
+	echo "Close the installer (or run 'killall InstallAssistant'), then" >&2
+	echo "try $PROGRAMNAME again." >&2
 	exit 1
 fi
 if mount | grep " on $INSTALLER_VOLUME " >/dev/null; then
 	echo "A drive is already mounted at $INSTALLER_VOLUME." >&2
 	echo "That makes things confusing. Eject the volume mounted there" >&2
 	echo "(or run 'umount \"$INSTALLER_VOLUME\"')," >&2
-	echo "then try $0 again." >&2
+	echo "then try $PROGRAMNAME again." >&2
 	exit 1
 fi
 
@@ -51,22 +67,22 @@ getInstallerVersion() {
 
 if [ -r "$CREATEINSTALL_PATH" ]; then
 	checkedVersion="$(getInstallerVersion "$CREATEINSTALL_PATH")"
-	if [ "x$MACOS_VERSION" != "x$checkedVersion" ]; then
+	if [ "$MACOS_VERSION" != "$checkedVersion" ]; then
 		echo 'A macOS installation app for a different macOS version already' >&2
 		echo "exists at $INSTALLERAPP_PATH. That makes things confusing." >&2
 		echo "Move that app somewhere else (or delete it by running" >&2
-		echo "'rm -rf \"$INSTALLERAPP_PATH\"), then try" >&2
-		echo "$0 again." >&2
+		echo "'sudo rm -rf \"$INSTALLERAPP_PATH\"), then try" >&2
+		echo "$PROGRAMNAME again." >&2
 		exit 1
 	fi
 else
-	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION"
-	sleep 1
+	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"
+	sleep 5
 	if installer_pid="$(pgrep -n osinstallersetupd)"; then
 		installer_path="$(ps -o comm= "$installer_pid")"
-		INSTALLERAPP_PATH="${installer_path%/Contents/Framework/OSInstallerSetup.framework/resources/osinstallersetupd}"
+		INSTALLERAPP_PATH="${installer_path%/Contents/Frameworks/OSInstallerSetup.framework/Resources/osinstallersetupd}"
 		CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
-		kill installer_pid
+		killall InstallAssistant
 	fi
 	if ! [ -r "$CREATEINSTALL_PATH" ]; then
 		echo "'createinstallmedia' should be at '$CREATEINSTALL_PATH'," >&2
@@ -74,7 +90,7 @@ else
 		exit 1
 	fi
 	checkedVersion="$(getInstallerVersion "$CREATEINSTALL_PATH")"
-	if [ "x$MACOS_VERSION" != "$checkedVersion" ]; then
+	if [ "$MACOS_VERSION" != "$checkedVersion" ]; then
 		echo "The installer app found at $INSTALLERAPP_PATH" >&2
 		echo "appears to be for macOS version $checkedVersion rather than $MACOS_VERSION." >&2
 		echo "That's pretty confusing. Exiting." >&2
@@ -82,13 +98,106 @@ else
 	fi
 fi
 INSTALLER_IMAGENAME="$(basename "${INSTALLERAPP_PATH}" ".app")"
-hdiutil create -o "$INSTALLER_IMAGENAME" -size 16g -layout SPUD -fs HFS+J
-hdiutil attach "$INSTALLER_IMAGENAME".dmg -noverify -mountpoint "/Volumes/$INSTALLER_IMAGENAME" -nobrowse
 
-"$CREATEINSTALL_PATH" --volume "/Volumes/$INSTALLER_IMAGENAME" --nointeraction
+echo Making temporary directory... >"$VERBOSEOUT"
+TEMPDIR="$(mktemp -d -t "mkmacvm")"
 
+cleanup() {
+	if [ "$#" -gt "1" ]; then
+		echo 'Usage: cleanup [signal]' >&2
+		return 1
+	fi
+	case "$1" in
+		"" | HUP | INT | QUIT | TERM) ;;
+		*)
+			echo "'$1' is an unsupported signal" >&2
+			return 1
+			;;
+	esac
+	# Should we be more aggressive about cleaning stuff up if
+	# the exit is specifically due to an error? Maybe, e.g., by
+	# deleting the VM or other creations?
+	echo "Cleaning up" >"$VERBOSEOUT"
+	# Allow cancelling further if, e.g., someone hits Ctrl-C while cleanup is
+	# happening; untrap
+	trap - EXIT HUP INT QUIT TERM
+	if [ -n "$TEMPDIR" ]; then
+		rm -rf -- "$TEMPDIR" || echo "Unable to complete cleanup" >&2
+	fi
+	if [ -n "$VM_HOME" ] && [ -n "$INSTALLER_IMAGENAME" ]; then
+		rm -rf -- "$VM_HOME"/"$INSTALLER_IMAGENAME".dmg \
+			|| echo "Unable to complete cleanup" >&2
+	fi
+	if [ -n "$1" ]; then
+		kill -s "$1" 0
+		# Shells do not portably exit despite POSIX specification
+		# on some of the above signals (e.g., bash ignores SIGQUIT)
+		exit 129 # POSIX: quitting in response to a signal should have $? > 128
+	fi
+	exit
+}
+signal() {
+	if [ "$#" != "1" ]; then
+		echo 'Usage: signal signalname' >&2
+		return 1
+	fi
+	signal=""
+	case "$1" in
+		"HUP" | "INT" | "QUIT" | "TERM")
+			signal="$1"
+			;;
+		"EXIT") ;;
+		*)
+			echo 'Usage: signal signalname' >&2
+			return 1
+			;;
+	esac
+	trap '' EXIT
+	echo "Processing $1 signal" >"$VERBOSEOUT"
+	if [ -n "$signal" ]; then
+		cleanup "$signal"
+	else
+		cleanup
+	fi
+}
+trapforcleanup() {
+	trap cleanup EXIT
+	trap 'signal HUP' HUP
+	trap 'signal INT' INT
+	trap 'signal QUIT' QUIT
+	trap 'signal TERM' TERM
+}
+
+trapforcleanup
+
+echo "Creating virtual installation disk..." >"$VERBOSEOUT"
+mkdir "$TEMPDIR/mountpoint"
+hdiutil create -o "$TEMPDIR/$INSTALLER_IMAGENAME" -size 16g -layout SPUD -fs HFS+J >"$DEBUGOUT"
+hdiutil attach "$TEMPDIR/$INSTALLER_IMAGENAME".dmg -noverify -mountpoint "$TEMPDIR/mountpoint" -nobrowse >"$DEBUGOUT"
+
+# createinstallmedia unfortunately sends normal progress output to stderr
+"$CREATEINSTALL_PATH" --volume "$TEMPDIR/mountpoint" --nointeraction >"$DEBUGOUT" 2>&1
+# note that at the end of this the volume is automatically remounted at
+# /Volumes/Install macOS Monterey/ or the like, and leaves other crap mounted at
+# /Volumes/Shared Support or similar
+if ! mount | grep "on ${INSTALLER_VOLUME} " >"$DEBUGOUT"; then
+	echo 'The installation image does not appear to be mounted at' >&2
+	echo "$INSTALLER_VOLUME" >&2
+	echo "Too confused to continue. Exiting." >&2
+	exit 1
+fi
+cat >"/Volumes/${INSTALLER_IMAGENAME}/install" <<-EOF
+	#!/bin/sh
+
+	"/Volumes/Image Volume/${INSTALLER_IMAGENAME}.app/Contents/Resources/startosinstall" \
+	--agreetolicense --volume "/Volumes/Macintosh HD" \
+	--installpackage "/Volumes/Image Volume/setup-headless-configuration.pkg"
+EOF
+chmod 0755 "/Volumes/${INSTALLER_IMAGENAME}/install"
+
+echo "Getting configuration data for user '$USERNAME'..." >"$VERBOSEOUT"
 hashdata="$(dscl -plist . -read /Users/"$USERNAME" ShadowHashData)"
-if ! echo "$hashdata" | plutil -extract 'dsAttrTypeNative:ShadowHashData.0' raw - >/dev/null 2>&1; then
+if ! echo "$hashdata" | plutil -extract 'dsAttrTypeNative:ShadowHashData.0' raw - >"$DEBUGOUT" 2>&1; then
 	echo "Unable to obtain current settings for user '$USERNAME'." >&2
 	exit 1
 fi
@@ -108,50 +217,126 @@ SHADOW="$(plutil -create binary1 - -o - \
 	| plutil -insert 'SALTED-SHA512-PBKDF2.iterations' -integer "${user_iterations}" - -o - \
 	| plutil -insert 'SALTED-SHA512-PBKDF2.salt' -data "${user_salt}" - -o - \
 	| base64)"
-
-cat >headlessconfig/config.sh <<-EOF
+mkdir "$TEMPDIR"/headlessconfig
+cat >"$TEMPDIR"/headlessconfig/config.sh <<-EOF
 	#!/bin/sh
 
 	USERNAME="$USERNAME"
+	USERREALNAME="$USERREALNAME"
 	SHADOW="$SHADOW"
 EOF
 
-cat >"/Volumes/${INSTALLER_IMAGENAME}/install" <<-EOF
-	#!/bin/sh
-
-	"/Volumes/Image Volume/${INSTALLER_IMAGENAME}.app/Contents/Resources/startosinstall" \
-	--agreetolicense --volume "/Volumes/Macintosh HD" \
-	--installpackage "/Volumes/Image Volume/setup-headless-configuration.pkg"
-EOF
-chmod 0755 "/Volumes/${INSTALLER_IMAGENAME}/install"
-
+echo "Creating post-installation configuration package..." >"$VERBOSEOUT"
 if [ -r ~/.ssh/id_ecdsa.pub ]; then
-	cp ~/.ssh/id_ecdsa.pub headlessconfig/
+	cp ~/.ssh/id_ecdsa.pub "$TEMPDIR"/headlessconfig/
 fi
+if [ -r "$(dirname "$0")"/postinstall ]; then
+	cp "$(dirname "$0")"/postinstall "$TEMPDIR"/headlessconfig
+	chmod 0755 "$TEMPDIR"/headlessconfig/postinstall
+fi
+pkgbuild --nopayload --scripts "$TEMPDIR"/headlessconfig/ --identifier \
+	headless-configuration "$TEMPDIR"/headless-configuration.pkg >"$DEBUGOUT"
+productbuild --package "$TEMPDIR"/headless-configuration.pkg \
+	"$TEMPDIR"/setup-headless-configuration.pkg >"$DEBUGOUT"
+cp "$TEMPDIR"/setup-headless-configuration.pkg "$INSTALLER_VOLUME"
 
-pkgbuild --nopayload --scripts headlessconfig/ --identifier \
-	headless-configuration headless-configuration.pkg
-productbuild --package headless-configuration.pkg \
-	setup-headless-configuration.pkg
-cp setup-headless-configuration.pkg "$INSTALLER_VOLUME"
+hdiutil detach "$INSTALLER_VOLUME" >"$DEBUGOUT"
+chown "$USERNAME" "$TEMPDIR/$INSTALLER_IMAGENAME".dmg
 
-hdiutil detach "$INSTALLER_VOLUME"
-chown "$USERNAME" "$INSTALLER_IMAGENAME".dmg
-
+echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 # The VM can only be seen and modified by the creating
-# user. so all prlctl commands must be done via "reverse sudo"
-sudo -u "$USERNAME" prlctl create "$VM_NAME" -o macos
-sudo -u "$USERNAME" prlctl set "$VM_NAME" --cpus auto --memsize auto \
-	--auto-share-camera off \
-	--nested-virt on \
-	--smart-mount off --shared-cloud off \
-	--sh-app-guest-to-host off \
-	--sh-app-host-to-guest off \
-	--startup-view window \
-	--adaptive-hypervisor on
-sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set "cdrom0" --image "$INSTALLER_IMAGENAME".dmg --connect
+# user, so all prlctl commands must be done via "reverse sudo"
+{ sudo -u "$USERNAME" prlctl create "$VM_NAME" -o macos; } >"$DEBUGOUT"
+{
+	sudo -u "$USERNAME" prlctl set "$VM_NAME" --cpus auto --memsize auto \
+		--auto-share-camera off \
+		--nested-virt on \
+		--smart-mount off --shared-cloud off \
+		--sh-app-guest-to-host off \
+		--sh-app-host-to-guest off \
+		--startup-view window \
+		--adaptive-hypervisor on
+} >"$DEBUGOUT"
+VM_HOME="$(sudo -u "$USERNAME" prlctl list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
+mv "$TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
+{
+	sudo -u "$USERNAME" prlctl set "$VM_NAME" \
+		--device-set "cdrom0" \
+		--image "$VM_HOME/$INSTALLER_IMAGENAME".dmg \
+		--connect
+} >"$DEBUGOUT"
+
+echo "Starting virtual machine..." >"$VERBOSEOUT"
 osascript -e 'tell application "Parallels Desktop" to activate'
-sudo -u "$USERNAME" prlctl start "$VM_NAME"
+{ sudo -u "$USERNAME" prlctl start "$VM_NAME"; } >"$DEBUGOUT"
+echo
+echo '************* USER INTERACTION REQUIRED ********************'
+echo 'Virtual machine starting. Once it boots, choose a language.'
+echo 'Then, open a terminal with keystrokes shift-cmd-T or via the'
+echo '"Utilities" menu. Run:'
+echo '/Volumes/Image Volume/install'
+echo '************************************************************'
+echo
+
+echo 'Waiting for installation to complete...' >"$VERBOSEOUT"
+VM_STATUS=""
+VM_ERROR=""
+VM_DONE=""
+vmIsRunning() {
+	VM_STATUS="$(sudo -u "$USERNAME" prlctl status "$VM_NAME")"
+	if [ -z "${VM_STATUS##VM "$VM_NAME" exist *}" ]; then # this is in the right format
+		VM_ERROR=""
+		if [ "stopped" = "${VM_STATUS##* }" ]; then # the last word is 'stopped'
+			if [ -z "$VM_DONE" ]; then                 # it might be rebooting; try one more time
+				VM_DONE=true
+				sleep 1
+				if ! vmIsRunning; then # nope, really done
+					return 1
+				else # false alarm
+					VM_DONE=""
+					return 0
+				fi
+			else # ah, this happened before
+				return 1
+			fi
+		else # everything looks good, and the last word isn't 'stopped'
+			return 0
+		fi
+	else                         # uh, that didn't work right
+		if [ -z "$VM_ERROR" ]; then # okay, it's the first time, try once more
+			VM_ERROR=true
+			sleep 1
+			vmIsRunning
+			case "$?" in
+				2) # yeah, it's real
+					return 2
+					;;
+				1) # what, now it's stopped? Fine.
+					return 1
+					;;
+				0) # yay, we recovered by just checking it again!
+					VM_ERROR=""
+					return 0
+					;;
+				*) # some other error, I guess
+					return 2 ;;
+			esac
+		else # we've been here before
+			return 2
+		fi
+	fi
+}
+while vmIsRunning; do
+	sleep 5
+done
+echo "Removing installation disk image..." >"$VERBOSEOUT"
+{ sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"
+# still need to make it actually headless, maybe start by testing
+# to ensure that we can ssh in?
+echo "Done creating headless VM '$VM_NAME'. Start with" >"$VERBOSEOUT"
+echo "prlctl start \"$VM_NAME\"" >"$VERBOSEOUT"
+echo "and access with" >"$VERBOSEOUT"
+echo "ssh \"$VM_NAME.shared\"" >"$VERBOSEOUT"
 
 #
 # Please see also https://github.com/therealchjones/mkmacvm/blob/main/LICENSE

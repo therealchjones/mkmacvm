@@ -1,12 +1,32 @@
 #!/bin/sh
 
-set -e
+if [ "postinstall" = "${0##*/}" ]; then
+	VERBOSE=y
+fi
+if [ -n "$DEBUG" ]; then
+	set -x
+	set -e
+	DEBUGOUT=/dev/stdout
+	VERBOSE=y
+	whoami
+	env
+	set
+else
+	DEBUGOUT=/dev/null
+fi
+if [ -n "$VERBOSE" ]; then
+	VERBOSEOUT=/dev/stdout
+else
+	VERBOSEOUT=/dev/null
+fi
 
-echo Getting script directory...
-SCRIPTDIR="${0%/*}"
-echo Script directory is "$SCRIPTDIR"
+if [ "${0}" = "${0%/*}" ]; then
+	SCRIPTDIR="."
+else
+	SCRIPTDIR="${0%/*}"
+fi
 
-echo Getting configuration...
+echo Getting configuration... >"$VERBOSEOUT"
 if [ ! -r "${SCRIPTDIR}/config.sh" ]; then
 	echo "Configuration file '${SCRIPTDIR}/config.sh' not found." >&2
 	exit 1
@@ -26,27 +46,34 @@ if [ -z "$SHADOW" ]; then
 	exit 1
 fi
 
-# This next step requires 'createuser' from the pyusercreatepkg project
-# and an appropriate plist-formatted user configuration to work
-# properly.
-echo Creating user "'$USERNAME'"...
-"$SCRIPTDIR"/createuser "$SCRIPTDIR/$USERNAME.plist"
-
-echo Adding "$USERNAME" to admin group...
+echo Creating user "'$USERNAME'"... >"$VERBOSEOUT"
+dscl . -create /Users/"$USERNAME"
+if [ -n "$USERREALNAME" ]; then
+	dscl . -create /Users/"$USERNAME" RealName "$USERREALNAME"
+fi
+dscl . -create /Users/"$USERNAME" UniqueID 501
+dscl . -create /Users/"$USERNAME" PrimaryGroupID 20
+dscl . -create /Users/"$USERNAME" UserShell /bin/zsh
 dseditgroup -o edit -a "$USERNAME" -t user admin
-
-echo Creating home directories..
-createhomedir -c -u "$USERNAME"
-
+dscl . -create /Users/"$USERNAME" dsAttrTypeStandard:AuthenticationAuthority \
+	';ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2>'
+cat >"$SCRIPTDIR/shadowhash" <<-EOF
+	0x0A 0x5C 0x3A 0x2C dsRecTypeStandard:Users 2 dsAttrTypeStandard:RecordName base64:dsAttrTypeNative:ShadowHashData
+	${USERNAME}:$SHADOW
+EOF
+dsimport "$SCRIPTDIR/shadowhash" /Local/Default M
+echo Creating home directories... >"$VERBOSEOUT"
 USER_HOME=/Users/"$USERNAME"
+dscl . -create /Users/"$USERNAME" NFSHomeDirectory "$USER_HOME"
+createhomedir -c -u "$USERNAME" >"$DEBUGOUT"
 if [ ! -d "$USER_HOME" ]; then
 	echo Home directory "'$USER_HOME'" not created. Exiting. >&2
 	exit 1
 fi
 
-echo Looking for SSH keys...
+echo Looking for SSH keys... >"$VERBOSEOUT"
 if [ -r "$SCRIPTDIR"/id_ecdsa.pub ]; then
-	echo Installing SSH keys...
+	echo Installing SSH keys... >"$VERBOSEOUT"
 	USER_SSH="$USER_HOME"/.ssh
 	mkdir -p "$USER_SSH"
 	cp "$SCRIPTDIR"/id_ecdsa.pub "$USER_SSH"/authorized_keys
@@ -55,12 +82,8 @@ if [ -r "$SCRIPTDIR"/id_ecdsa.pub ]; then
 	chown -R "$USERNAME" "$USER_SSH"
 fi
 
-echo Starting the SSH server...
-/bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist
-
-echo Disabling setup assistant...
+echo Disabling setup assistant... >"$VERBOSEOUT"
 /usr/bin/touch /private/var/db/.AppleSetupDone
-
 mkdir -p "${USER_HOME}"/Library/Preferences
 SETUPPREFS="${USER_HOME}"/Library/Preferences/com.apple.SetupAssistant
 for setting in DidSeeApplePaySetup DidSeeAvatarSetup DidSeeCloudSetup DidSeeiCloudLoginForStorageServices DidSeePrivacy DidSeeSiriSetup DidSeeSyncSetup DidSeeSyncSetup2 DidSeeTouchIDSetup DidSeeAppearanceSetup DidSeeTrueTone DidSeeActivationLock DidSeeScreenTime DidSeeAccessibility DidSeeAppStore; do
@@ -73,13 +96,55 @@ done
 chown "$USERNAME" "${USER_HOME}/Library/Preferences"
 chown "$USERNAME" "$SETUPPREFS".plist
 
-echo Updating macOS...
+echo Updating macOS... >"$VERBOSEOUT"
 # apparently need to get network up first
-/usr/sbin/softwareupdate -i -a
+#/usr/sbin/softwareupdate -i -a
 
-echo Ejecting installation disk...
-# this probably needs to be dynamic, also it's not working
-hdiutil detach "/Volumes/Install macOS Monterey"
+echo Starting the SSH server... >"$VERBOSEOUT"
+/bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist
 
-echo Shutting down.
+echo Shutting down. >"$VERBOSEOUT"
 /sbin/shutdown -h now
+
+#
+# Please see also https://github.com/therealchjones/mkmacvm/blob/main/LICENSE
+#
+# Copyright 2019 Twocanoes Software, Inc
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not
+# use this source code except in compliance with the License. You may obtain a
+# copy of the License at
+#
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations under
+# the License.

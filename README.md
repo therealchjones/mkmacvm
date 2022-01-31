@@ -3,18 +3,40 @@
 Build a simple macOS virtual machine for Parallels Desktop with minimal
 interaction
 
-This is a work in progress and is not suitable for general use.
-
 ## Requirements
 
-- macOS 12.1 Monterey
+- macOS 12.2 Monterey
 - Paralells Desktop Pro 17
 
 ## Usage
 
-```shell
-sudo ./mkmacvm
-```
+1. In Terminal, on the macOS host computer:
+
+   ```shell
+   sudo ./mkmacvm
+   ```
+
+2. When prompted, within the new virtual machine, choose a language, then open a terminal and run:
+
+   ```shell
+   /Volumes/Image Volume/install
+   ```
+
+3. There is no step 3.
+
+## FAQ
+
+- Why did I get an error that reads:
+
+  ```shell
+  Error erasing disk error number (22, 0) An error occurred erasing the disk.
+  ```
+
+  I have no idea. I don't know what it means or why it happens. However, thanks to
+  [this post](https://www.blackmanticore.com/659444a81916ef87765c979e4231753d),
+  I can tell you that it likely happened after a previous attempt failed, and I
+  can recommend rebooting your computer as a reasonable and reliable fix (until
+  it happens again).
 
 ## Acknowledgments
 
