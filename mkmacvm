@@ -2,6 +2,7 @@
 
 MACOS_VERSION="12.2"
 VM_NAME="macOS"
+INSTALLER="Install macOS Monterey"
 
 DEBUG="${DEBUG:-}"
 VERBOSE="${VERBOSE:-}"
@@ -18,18 +19,19 @@ if [ -n "$VERBOSE" ]; then
 	VERBOSEOUT=/dev/stdout
 fi
 
-INSTALLERAPP_PATH="/Applications/Install macOS Monterey.app"
+INSTALLERAPP_PATH="$/Applications/$INSTALLER.app"
 CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
-INSTALLER_VOLUME="/Volumes/Install macOS Monterey"
+INSTALLER_VOLUME="/Volumes/$INSTALLER"
+SHAREDSUPPORT_VOLUME="/Volumes/Shared Support"
 
 PROGRAMNAME="$(basename "$0")"
 
+# Make sure mkmacvm is being run properly
 if [ "0" != "$(id -u)" ]; then
 	echo "$PROGRAMNAME requires administrator privileges for several portions." >&2
 	echo "Run as 'sudo \"$0\"'." >&2
 	exit 1
 fi
-
 if [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
 	echo "$PROGRAMNAME should be used by a regular user under 'sudo'; don't run" >&2
 	echo "as root directly. Run as 'sudo \"$0\"'." >&2
@@ -37,11 +39,15 @@ if [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
 fi
 USERNAME="$SUDO_USER"
 USERREALNAME="$(id -F "$USERNAME")"
+USERREALNAME="${USERREALNAME:-"$USERNAME"}"
 
+# Make sure some things are not already running or in place, so that they
+# can be monitored or shut down later without messing with the system as
+# currently running.
 # prlctl must be run as the end user, not sudo/root
 if sudo -u "$SUDO_USER" prlctl list "$VM_NAME" >/dev/null 2>&1; then
 	echo "A virtual machine named '$VM_NAME' already exists. That" >&2
-	echo "make things confusing. Remove or rename that virtual machine," >&2
+	echo "makes things confusing. Remove or rename that virtual machine," >&2
 	echo "then try $PROGRAMNAME again." >&2
 	exit 1
 fi
@@ -51,28 +57,36 @@ if pgrep osinstallersetupd >/dev/null || pgrep InstallAssistant >/dev/null; then
 	echo "try $PROGRAMNAME again." >&2
 	exit 1
 fi
-if mount | grep " on $INSTALLER_VOLUME " >/dev/null; then
+if diskutil list "$INSTALLER_VOLUME" >/dev/null 2>&1; then
 	echo "A drive is already mounted at $INSTALLER_VOLUME." >&2
 	echo "That makes things confusing. Eject the volume mounted there" >&2
 	echo "(or run 'umount \"$INSTALLER_VOLUME\"')," >&2
 	echo "then try $PROGRAMNAME again." >&2
 	exit 1
 fi
+if diskutil list "$SHAREDSUPPORT_VOLUME" >/dev/null 2>&1; then
+	echo "A drive is already mounted at $SHAREDSUPPORT_VOLUME." >&2
+	echo "That makes things confusing. Eject the volume mounted there" >&2
+	echo "(or run 'umount \"$SHAREDSUPPORT_VOLUME\"')," >&2
+	echo "then try $PROGRAMNAME again." >&2
+	exit 1
+fi
 
 getInstallerVersion() {
 	if [ -z "$1" ]; then return; fi
+	if [ ! -r "$1" ]; then return; fi
 	grep -a -A 1 DTPlatformVersion "$1" \
 		| sed -n -E '2s#^.*>(.*)</.*$#\1#p'
 }
-
-if [ -r "$CREATEINSTALL_PATH" ]; then
-	checkedVersion="$(getInstallerVersion "$CREATEINSTALL_PATH")"
-	if [ "$MACOS_VERSION" != "$checkedVersion" ]; then
+if [ -e "$INSTALLERAPP_PATH" ]; then
+	if [ ! -x "$CREATEINSTALL_PATH" ] \
+		|| [ "$MACOS_VERSION" != "$(getinstallerversion "$CREATEINSTALL_PATH")" ]; then
 		echo 'A macOS installation app for a different macOS version already' >&2
-		echo "exists at $INSTALLERAPP_PATH. That makes things confusing." >&2
-		echo "Move that app somewhere else (or delete it by running" >&2
-		echo "'sudo rm -rf \"$INSTALLERAPP_PATH\"), then try" >&2
-		echo "$PROGRAMNAME again." >&2
+		echo "exists at $INSTALLERAPP_PATH." >&2
+		echo "That makes things confusing. Move that app somewhere else (or " >&2
+		echo "delete it by running" >&2
+		echo "'sudo rm -rf \"$INSTALLERAPP_PATH\")," >&2
+		echo "then try $PROGRAMNAME again." >&2
 		exit 1
 	fi
 else
@@ -100,7 +114,10 @@ fi
 INSTALLER_IMAGENAME="$(basename "${INSTALLERAPP_PATH}" ".app")"
 
 echo Making temporary directory... >"$VERBOSEOUT"
-TEMPDIR="$(mktemp -d -t "mkmacvm")"
+if ! TEMPDIR="$(mktemp -d -t "mkmacvm")"; then
+	echo "Unable to create temporary directory. Exiting." >&2
+	exit 1
+fi
 
 cleanup() {
 	if [ "$#" -gt "1" ]; then
@@ -121,13 +138,17 @@ cleanup() {
 	# Allow cancelling further if, e.g., someone hits Ctrl-C while cleanup is
 	# happening; untrap
 	trap - EXIT HUP INT QUIT TERM
-	if [ -n "$TEMPDIR" ]; then
-		rm -rf -- "$TEMPDIR" || echo "Unable to complete cleanup" >&2
+	if [ -z "$TEMPDIR" ]; then
+		echo "TEMPDIR is no longer set; something's wrong." >&2
+		echo "Exiting without cleanup." >&2
+		exit 1
 	fi
-	if [ -n "$VM_HOME" ] && [ -n "$INSTALLER_IMAGENAME" ]; then
-		rm -rf -- "$VM_HOME"/"$INSTALLER_IMAGENAME".dmg \
-			|| echo "Unable to complete cleanup" >&2
-	fi
+	for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
+		hdiutil detach "$volume" >"$DEBUGOUT" 2>&1 || true
+	done
+	rm -rf -- "$TEMPDIR" || echo "Unable to remove '$TEMPDIR'" >&2
+	rm -rf -- "$VM_HOME"/"$INSTALLER_IMAGENAME".dmg \
+		|| echo "Unable to remove '$VM_HOME/$INSTALLER_IMAGENAME.dmg'" >&2
 	if [ -n "$1" ]; then
 		kill -s "$1" 0
 		# Shells do not portably exit despite POSIX specification
