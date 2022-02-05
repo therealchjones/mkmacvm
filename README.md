@@ -68,7 +68,7 @@ Though it does not share any meaningful source code with them, `mkmacvm` is
 heavily inspired by these excellent projects:
 
 - [macdeploystick](https://bitbucket.org/twocanoes/macdeploystick/src/master/):
-  configure settings and deploy macOS with minimal interaction and multiple
+  configure settings to deploy macOS with minimal interaction and multiple
   hardware and software tools
 
 - [pycreateuserpkg](https://github.com/gregneagle/pycreateuserpkg): create macOS
