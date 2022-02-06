@@ -65,7 +65,9 @@ dsimport "$SCRIPTDIR/shadowhash" /Local/Default M
 echo Creating home directories... >"$VERBOSEOUT"
 USER_HOME=/Users/"$USERNAME"
 dscl . -create /Users/"$USERNAME" NFSHomeDirectory "$USER_HOME"
-createhomedir -c -u "$USERNAME" >"$DEBUGOUT"
+# Workaround for a dumb createhomedir error/warning when it's can't read
+# parent directories, fixes issue #6
+(cd / && createhomedir -c -u "$USERNAME") >"$DEBUGOUT"
 if [ ! -d "$USER_HOME" ]; then
 	echo Home directory "'$USER_HOME'" not created. Exiting. >&2
 	exit 1
