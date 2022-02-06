@@ -19,7 +19,7 @@ if [ -n "$VERBOSE" ]; then
 	VERBOSEOUT=/dev/stdout
 fi
 
-INSTALLERAPP_PATH="$/Applications/$INSTALLER.app"
+INSTALLERAPP_PATH="/Applications/$INSTALLER.app"
 CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
 INSTALLER_VOLUME="/Volumes/$INSTALLER"
 SHAREDSUPPORT_VOLUME="/Volumes/Shared Support"
