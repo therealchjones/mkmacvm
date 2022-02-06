@@ -79,6 +79,7 @@ getInstallerVersion() {
 		| sed -n -E '2s#^.*>(.*)</.*$#\1#p'
 }
 if [ -e "$INSTALLERAPP_PATH" ]; then
+	echo "Checking existing installer..." >"$VERBOSEOUT"
 	if [ ! -x "$CREATEINSTALL_PATH" ] \
 		|| [ "$MACOS_VERSION" != "$(getinstallerversion "$CREATEINSTALL_PATH")" ]; then
 		echo 'A macOS installation app for a different macOS version already' >&2
@@ -90,9 +91,11 @@ if [ -e "$INSTALLERAPP_PATH" ]; then
 		exit 1
 	fi
 else
+	echo "Finding or downloading macOS installer..." >"$VERBOSEOUT"
 	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"
 	sleep 5
 	if installer_pid="$(pgrep -n osinstallersetupd)"; then
+		echo "Closing installer GUI..." >"$VERBOSEOUT"
 		installer_path="$(ps -o comm= "$installer_pid")"
 		INSTALLERAPP_PATH="${installer_path%/Contents/Frameworks/OSInstallerSetup.framework/Resources/osinstallersetupd}"
 		CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
