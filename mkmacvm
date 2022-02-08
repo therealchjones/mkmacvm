@@ -81,7 +81,7 @@ getInstallerVersion() {
 if [ -e "$INSTALLERAPP_PATH" ]; then
 	echo "Checking existing installer..." >"$VERBOSEOUT"
 	if [ ! -x "$CREATEINSTALL_PATH" ] \
-		|| [ "$MACOS_VERSION" != "$(getinstallerversion "$CREATEINSTALL_PATH")" ]; then
+		|| [ "$MACOS_VERSION" != "$(getInstallerVersion "$CREATEINSTALL_PATH")" ]; then
 		echo 'A macOS installation app for a different macOS version already' >&2
 		echo "exists at $INSTALLERAPP_PATH." >&2
 		echo "That makes things confusing. Move that app somewhere else (or " >&2
