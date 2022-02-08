@@ -376,12 +376,12 @@ echo "Shutting down virtual machine..." >"$VERBOSEOUT"
 waitForVmShutdown
 echo "Removing installation disk image..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"
-# still need to make it actually headless, maybe start by testing
-# to ensure that we can ssh in?
-echo "Done creating headless VM '$VM_NAME'. Start with" >"$VERBOSEOUT"
+
+echo "" >"$VERBOSEOUT"
+echo "Done creating VM '$VM_NAME'. Start with:" >"$VERBOSEOUT"
 echo "prlctl start \"$VM_NAME\"" >"$VERBOSEOUT"
-echo "and access with" >"$VERBOSEOUT"
-echo "ssh \"$VM_NAME.shared\"" >"$VERBOSEOUT"
+echo "and access with:" >"$VERBOSEOUT"
+echo "ssh \"$VM_HOSTNAME\"" >"$VERBOSEOUT"
 
 #
 # Please see also https://github.com/therealchjones/mkmacvm/blob/main/LICENSE
