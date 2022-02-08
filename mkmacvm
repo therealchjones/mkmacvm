@@ -3,6 +3,7 @@
 MACOS_VERSION="12.2"
 VM_NAME="macOS"
 INSTALLER="Install macOS Monterey"
+VM_HOSTNAME="macos.shared"
 
 DEBUG="${DEBUG:-}"
 VERBOSE="${VERBOSE:-}"
@@ -350,9 +351,29 @@ vmIsRunning() {
 		fi
 	fi
 }
-while vmIsRunning; do
-	sleep 5
-done
+waitForVmShutdown() {
+	while vmIsRunning; do
+		sleep 5
+	done
+}
+sshIsRunning() {
+	# returns error if not connectable, including
+	# if the hostname is not found
+	nc -z "$VM_HOSTNAME" 22 >"$DEBUGOUT" 2>&1
+}
+waitForSsh() {
+	until sshIsRunning; do
+		sleep 5
+	done
+}
+
+waitForSsh # which ensures the hostname is found and has port 22 open
+echo "Setting up local ssh access..." >"$VERBOSEOUT"
+{ sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT"
+{ sudo -u "$USERNAME" ssh -o StrictHostKeyChecking=no "$VM_HOSTNAME" true; } >"$DEBUGOUT" 2>&1
+echo "Shutting down virtual machine..." >"$VERBOSEOUT"
+{ sudo -u "$USERNAME" prlctl stop "$VM_NAME"; } >"$DEBUGOUT"
+waitForVmShutdown
 echo "Removing installation disk image..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"
 # still need to make it actually headless, maybe start by testing

@@ -105,8 +105,7 @@ echo Updating macOS... >"$VERBOSEOUT"
 echo Starting the SSH server... >"$VERBOSEOUT"
 /bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist
 
-echo Shutting down. >"$VERBOSEOUT"
-/sbin/shutdown -h now
+echo Completed "$0" >"$VERBOSEOUT"
 
 #
 # Please see also https://github.com/therealchjones/mkmacvm/blob/main/LICENSE
