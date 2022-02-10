@@ -1,23 +1,28 @@
 #!/bin/sh
 
+DEBUG=y
+
 MACOS_VERSION="12.2"
-VM_NAME="macOS"
 INSTALLER="Install macOS Monterey"
+VM_NAME="macOS"
 VM_HOSTNAME="macos.shared"
 
 DEBUG="${DEBUG:-}"
 VERBOSE="${VERBOSE:-}"
-DEBUGOUT=/dev/null
-VERBOSEOUT=/dev/null
 if [ -n "$DEBUG" ]; then
 	set -x
-	DEBUGOUT=/dev/stdout
+	DEBUGOUT="${DEBUGOUT:-/dev/stdout}"
 	echo "Enabled debugging output" >"$DEBUGOUT"
 	VERBOSE=yes
 	set -e
+	set -u
+else
+	DEBUGOUT=/dev/null
 fi
 if [ -n "$VERBOSE" ]; then
-	VERBOSEOUT=/dev/stdout
+	VERBOSEOUT="${VERBOSEOUT:-/dev/stdout}"
+else
+	VERBOSEOUT="/dev/null"
 fi
 
 INSTALLERAPP_PATH="/Applications/$INSTALLER.app"
@@ -54,18 +59,61 @@ if sudo -u "$SUDO_USER" prlctl list "$VM_NAME" >/dev/null 2>&1; then
 fi
 if pgrep osinstallersetupd >/dev/null || pgrep InstallAssistant >/dev/null; then
 	echo "Another installer is running. That makes things confusing." >&2
-	echo "Close the installer (or run 'killall InstallAssistant'), then" >&2
-	echo "try $PROGRAMNAME again." >&2
+	echo "Close the installer (or run 'killall InstallAssistant' and" >&2
+	echo "'killall osinstallersetupd', then try $PROGRAMNAME again." >&2
 	exit 1
 fi
-if diskutil list "$INSTALLER_VOLUME" >/dev/null 2>&1; then
+
+isMounted() {
+	# $1 may be any of the forms of DEVICES listed in diskutil(8) or a regular
+	# file. (Of note, if $1 is a symbolic link, behavior is unspecified.)
+	# If "$1" refers to a mounted filesystem or an attached disk image, prints
+	# output of the form
+	# <a> is [ mounted on | attached to ] <b>
+	# where <a> is a device or disk image file and <b> is a mountpoint or
+	# device, respectively. In these cases, the function returns 0 to indicate
+	# success. If "$1" does not refer to a mounted filesystem or an attached
+	# disk image, nothing is printed and the function returns 1 to indicate
+	# failure.
+	if [ ! -e "$1" ]; then return 1; fi
+	if disk="$(diskutil info -plist "$1")" 2>/dev/null; then
+		if mountpoint="$(echo "$disk" | plutil -extract MountPoint raw - -o -)" 2>/dev/null \
+			&& devicenode="$(echo "$disk" | plutil -extract DeviceNode raw - -o -)" 2>/dev/null \
+			&& [ -n "$mountpoint" ]; then
+			echo "$devicenode is mounted at $mountpoint"
+			return 0
+		else
+			return 1
+		fi
+	fi
+	i=0
+	while image="$(hdiutil info -plist | plutil -extract images.$i xml1 - -o -)" 2>/dev/null; do
+		if fullpath="$(echo "$image" | plutil -extract image-path raw - -o -)" 2>/dev/null; then
+			if [ "$(stat -f '%i' "$1")" -eq "$(stat -f '%i' "$fullpath")" ]; then
+				j=0
+				while device="$(echo "$image" | plutil -extract system-entities.$j xml1 - -o -)" 2>/dev/null; do
+					if deviceName="$(echo "$device" | plutil -extract dev-entry raw - -o -)" 2>/dev/null \
+						&& [ -n "${deviceName}" ] && [ "${deviceName}" = "${deviceName%[0-9]s[0-9]*}" ]; then
+						echo "$fullpath is attached to $deviceName"
+						return 0
+					fi
+					j=$((j + 1))
+				done
+			fi
+		fi
+		i=$((i + 1))
+	done
+	return 1
+}
+
+if isMounted "$INSTALLER_VOLUME" >"$DEBUGOUT" 2>&1; then
 	echo "A drive is already mounted at $INSTALLER_VOLUME." >&2
 	echo "That makes things confusing. Eject the volume mounted there" >&2
 	echo "(or run 'umount \"$INSTALLER_VOLUME\"')," >&2
 	echo "then try $PROGRAMNAME again." >&2
 	exit 1
 fi
-if diskutil list "$SHAREDSUPPORT_VOLUME" >/dev/null 2>&1; then
+if isMounted "$SHAREDSUPPORT_VOLUME" >"$DEBUGOUT" 2>&1; then
 	echo "A drive is already mounted at $SHAREDSUPPORT_VOLUME." >&2
 	echo "That makes things confusing. Eject the volume mounted there" >&2
 	echo "(or run 'umount \"$SHAREDSUPPORT_VOLUME\"')," >&2
@@ -79,6 +127,185 @@ getInstallerVersion() {
 	grep -a -A 1 DTPlatformVersion "$1" \
 		| sed -n -E '2s#^.*>(.*)</.*$#\1#p'
 }
+
+VM_ERROR=""
+VM_DONE=""
+vmIsRunning() {
+	if ! VM_STATUS="$(sudo -u "$USERNAME" prlctl status "$VM_NAME")" 2>"$DEBUGOUT"; then
+		return 1
+	fi
+	if [ -z "${VM_STATUS##VM "$VM_NAME" exist *}" ]; then # this is in the right format
+		VM_ERROR=""
+		if [ "stopped" = "${VM_STATUS##* }" ]; then # the last word is 'stopped'
+			if [ -z "$VM_DONE" ]; then                 # it might be rebooting; try one more time
+				VM_DONE=true
+				sleep 1
+				if ! vmIsRunning; then # nope, really done or errored
+					VM_DONE=""
+					return 1
+				else # false alarm
+					VM_DONE=""
+					return 0
+				fi
+			else # ah, this happened before
+				VM_DONE=""
+				return 1
+			fi
+		else # everything looks good, and the last word isn't 'stopped'
+			VM_DONE=""
+			return 0
+		fi
+	else                         # uh, that didn't work right
+		if [ -z "$VM_ERROR" ]; then # okay, it's the first time, try once more
+			VM_ERROR=true
+			sleep 1
+			vmIsRunning
+			case "$?" in
+				2) # yeah, it's real
+					VM_ERROR=""
+					return 2
+					;;
+				1) # what, now it's stopped? Fine.
+					VM_ERROR=""
+					return 1
+					;;
+				0) # yay, we recovered by just checking it again!
+					VM_ERROR=""
+					return 0
+					;;
+				*) # some other error, I guess
+					VM_ERROR=""
+					return 2
+					;;
+			esac
+		else # we've been here before
+			VM_ERROR=""
+			return 2
+		fi
+	fi
+}
+waitForVmShutdown() {
+	while vmIsRunning; do
+		sleep 5
+	done
+}
+cleanup() {
+	RETURNSTATUS=$?
+	if [ -n "$DEBUG" ] && [ "0" != "$RETURNSTATUS" ]; then
+		echo "Experienced error ($RETURNSTATUS) in debug mode." >"$DEBUGOUT"
+	else
+		echo "Cleaning up..." >"$VERBOSEOUT"
+	fi
+	# Allow cancelling further if, e.g., someone hits Ctrl-C while cleanup is
+	# happening; untrap
+	trap - EXIT
+	# If it's a normal exit, clean up temporary files
+	# If it's an interrupt or error exit in debug mode, leave everything (which
+	# is the same thing that happens when the shell exits due to set -e without
+	# trapping, or if the user hits Ctrl-C *now*)
+	# If it's an interrupt or error exit not in debug mode, clean up everything
+	if [ "0" = "$RETURNSTATUS" ] || [ -z "$DEBUG" ]; then
+		if vmIsRunning; then
+			if [ "0" = "$RETURNSTATUS" ]; then
+				echo "Shutting down virtual machine..." >"$VERBOSEOUT"
+				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME"; } >"$DEBUGOUT"
+				echo "Removing installation disk image from virtual machine..." >"$VERBOSEOUT"
+				{ sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"
+			else
+				echo "Forcefully shutting down virtual machine..." >"$VERBOSEOUT"
+				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME" --kill; } >"$DEBUGOUT"
+			fi
+			waitForVmShutdown
+		fi
+		echo "Unmounting temporary drives..." >"$VERBOSEOUT"
+		for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
+			hdiutil detach "$volume" >"$DEBUGOUT" 2>&1 || true
+		done
+		echo "Removing temporary files..." >"$VERBOSEOUT"
+		for file in "$MKMACVM_TEMPDIR" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
+			if [ -e "$file" ]; then
+				if ! rm -rf -- "$file"; then
+					echo "Unable to remove '$file'" >&2
+					if [ 0 = "$RETURNSTATUS" ]; then
+						RETURNSTATUS=1
+					fi
+				fi
+			fi
+		done
+		if [ -z "$PREEXISTINGINSTALLER" ] \
+			&& [ -e "$INSTALLERAPP_PATH" ] \
+			&& ! rm -rf -- "$INSTALLERAPP_PATH"; then
+			echo "Unable to remove macOS installer '$INSTALLERAPP_PATH'" >&2
+			if [ 0 = "$RETURNSTATUS" ]; then
+				RETURNSTATUS=1
+			fi
+		fi
+	fi
+	# Don't use an 'else', as RETURNSTATUS may have changed in the previous clause
+	if [ "0" != "$RETURNSTATUS" ] && [ -n "$DEBUG" ]; then
+		if vmIsRunning; then
+			echo "New potentially corrupt VM left running: $VM_NAME" >"$DEBUGOUT"
+		elif { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
+			echo "New potentially corrupt VM left in place: $VM_NAME" >"$DEBUGOUT"
+		fi
+		LEFT=""
+		for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
+			if mountpoint="$(isMounted "$volume")" 2>"$DEBUGOUT"; then
+				LEFT="$LEFT$mountpoint\n"
+			fi
+		done
+		if [ -n "$LEFT" ]; then
+			echo "Disk images left mounted:" >"$DEBUGOUT"
+			echo "$LEFT" >"$DEBUGOUT"
+		fi
+		LEFT=""
+		for file in "$MKMACVM_TEMPDIR" "$VM_HOME"; do
+			if [ -e "$file" ]; then
+				LEFT="$LEFT$file\n"
+			fi
+		done
+		if [ -z "$PREEXISTINGINSTALLER" ] \
+			&& [ -e "$INSTALLERAPP_PATH" ]; then
+			LEFT="$LEFT$INSTALLERAPP_PATH\n"
+		fi
+		if [ -n "$LEFT" ]; then
+			echo 'New files & directories left in place:' >"$DEBUGOUT"
+			echo "$LEFT" >"$DEBUGOUT"
+		fi
+	fi
+	if [ "0" != "$RETURNSTATUS" ] && [ -z "$DEBUG" ]; then
+		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
+			echo "Removing potentially corrupted VM..." >"$VERBOSEOUT"
+			{ sudo -u "$USERNAME" prlctl delete "$VM_NAME"; } >"$DEBUGOUT"
+		fi
+	fi
+	echo "Done." >"$VERBOSEOUT"
+	exit "$RETURNSTATUS"
+}
+trapforcleanup() {
+	# trap before adding anything to the disk
+	# make sure that functions called by the trap 'cleanup' function (and the functions
+	# those call, etc.) are defined before the trap
+	# make sure variables referred to by all those functions and cleanup are assigned
+	# explicitly before the trap and tested appropriately in the cleanup function
+	#
+	# Consider, for instance, if the environment in which mkmacvm is run already
+	# has MKMACVM_TEMPDIR="/" and it's exported (for whatever reason). The trap
+	# appropriately checks that MKMACVM_TEMPDIR is nonempty (which it is) before
+	# attempting to delete it. However, between when the trap is set and
+	# MKMACVM_TEMPDIR is assigned using `mktemp', the user presses Ctrl-C, and the
+	# script tries to delete /. So always assign the variables to be used early; in
+	# this case, the problem would have been prevented by assigning
+	# MKMACVM_TEMPDIR="" before setting the trap.
+
+	INSTALLER_IMAGEFILE=""
+	INSTALLER_MOUNTPOINT=""
+	PREEXISTINGINSTALLER=""
+	MKMACVM_TEMPDIR=""
+	VM_HOME=""
+	trap cleanup EXIT
+}
+trapforcleanup
 if [ -e "$INSTALLERAPP_PATH" ]; then
 	echo "Checking existing installer..." >"$VERBOSEOUT"
 	if [ ! -x "$CREATEINSTALL_PATH" ] \
@@ -87,20 +314,22 @@ if [ -e "$INSTALLERAPP_PATH" ]; then
 		echo "exists at $INSTALLERAPP_PATH." >&2
 		echo "That makes things confusing. Move that app somewhere else (or " >&2
 		echo "delete it by running" >&2
-		echo "'sudo rm -rf \"$INSTALLERAPP_PATH\")," >&2
+		echo "'sudo rm -rf \"$INSTALLERAPP_PATH\"')," >&2
 		echo "then try $PROGRAMNAME again." >&2
 		exit 1
 	fi
+	PREEXISTINGINSTALLER=y
 else
 	echo "Finding or downloading macOS installer..." >"$VERBOSEOUT"
 	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"
 	sleep 5
-	if installer_pid="$(pgrep -n osinstallersetupd)"; then
+	if installer_pid="$(pgrep -n osinstallersetupd)"; then # softwareupdate found an installer on the disk
 		echo "Closing installer GUI..." >"$VERBOSEOUT"
 		installer_path="$(ps -o comm= "$installer_pid")"
 		INSTALLERAPP_PATH="${installer_path%/Contents/Frameworks/OSInstallerSetup.framework/Resources/osinstallersetupd}"
 		CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
 		killall InstallAssistant
+		PREEXISTINGINSTALLER=y
 	fi
 	if ! [ -r "$CREATEINSTALL_PATH" ]; then
 		echo "'createinstallmedia' should be at '$CREATEINSTALL_PATH'," >&2
@@ -118,90 +347,20 @@ fi
 INSTALLER_IMAGENAME="$(basename "${INSTALLERAPP_PATH}" ".app")"
 
 echo Making temporary directory... >"$VERBOSEOUT"
-if ! TEMPDIR="$(mktemp -d -t "mkmacvm")"; then
+if ! MKMACVM_TEMPDIR="$(mktemp -d -t "mkmacvm")" || [ "$MKMACVM_TEMPDIR" = "" ]; then
 	echo "Unable to create temporary directory. Exiting." >&2
 	exit 1
 fi
 
-cleanup() {
-	if [ "$#" -gt "1" ]; then
-		echo 'Usage: cleanup [signal]' >&2
-		return 1
-	fi
-	case "$1" in
-		"" | HUP | INT | QUIT | TERM) ;;
-		*)
-			echo "'$1' is an unsupported signal" >&2
-			return 1
-			;;
-	esac
-	# Should we be more aggressive about cleaning stuff up if
-	# the exit is specifically due to an error? Maybe, e.g., by
-	# deleting the VM or other creations?
-	echo "Cleaning up" >"$VERBOSEOUT"
-	# Allow cancelling further if, e.g., someone hits Ctrl-C while cleanup is
-	# happening; untrap
-	trap - EXIT HUP INT QUIT TERM
-	if [ -z "$TEMPDIR" ]; then
-		echo "TEMPDIR is no longer set; something's wrong." >&2
-		echo "Exiting without cleanup." >&2
-		exit 1
-	fi
-	for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
-		hdiutil detach "$volume" >"$DEBUGOUT" 2>&1 || true
-	done
-	rm -rf -- "$TEMPDIR" || echo "Unable to remove '$TEMPDIR'" >&2
-	rm -rf -- "$VM_HOME"/"$INSTALLER_IMAGENAME".dmg \
-		|| echo "Unable to remove '$VM_HOME/$INSTALLER_IMAGENAME.dmg'" >&2
-	if [ -n "$1" ]; then
-		kill -s "$1" 0
-		# Shells do not portably exit despite POSIX specification
-		# on some of the above signals (e.g., bash ignores SIGQUIT)
-		exit 129 # POSIX: quitting in response to a signal should have $? > 128
-	fi
-	exit
-}
-signal() {
-	if [ "$#" != "1" ]; then
-		echo 'Usage: signal signalname' >&2
-		return 1
-	fi
-	signal=""
-	case "$1" in
-		"HUP" | "INT" | "QUIT" | "TERM")
-			signal="$1"
-			;;
-		"EXIT") ;;
-		*)
-			echo 'Usage: signal signalname' >&2
-			return 1
-			;;
-	esac
-	trap '' EXIT
-	echo "Processing $1 signal" >"$VERBOSEOUT"
-	if [ -n "$signal" ]; then
-		cleanup "$signal"
-	else
-		cleanup
-	fi
-}
-trapforcleanup() {
-	trap cleanup EXIT
-	trap 'signal HUP' HUP
-	trap 'signal INT' INT
-	trap 'signal QUIT' QUIT
-	trap 'signal TERM' TERM
-}
-
-trapforcleanup
-
 echo "Creating virtual installation disk..." >"$VERBOSEOUT"
-mkdir "$TEMPDIR/mountpoint"
-hdiutil create -o "$TEMPDIR/$INSTALLER_IMAGENAME" -size 16g -layout SPUD -fs HFS+J >"$DEBUGOUT"
-hdiutil attach "$TEMPDIR/$INSTALLER_IMAGENAME".dmg -noverify -mountpoint "$TEMPDIR/mountpoint" -nobrowse >"$DEBUGOUT"
+INSTALLER_MOUNTPOINT="$MKMACVM_TEMPDIR/mountpoint"
+mkdir "$INSTALLER_MOUNTPOINT"
+INSTALLER_IMAGEFILE="$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME".dmg
+hdiutil create -o "$INSTALLER_IMAGEFILE" -size 16g -layout SPUD -fs HFS+J >"$DEBUGOUT"
+hdiutil attach "$INSTALLER_IMAGEFILE" -noverify -mountpoint "$MKMACVM_TEMPDIR/mountpoint" -nobrowse >"$DEBUGOUT"
 
 # createinstallmedia unfortunately sends normal progress output to stderr
-"$CREATEINSTALL_PATH" --volume "$TEMPDIR/mountpoint" --nointeraction >"$DEBUGOUT" 2>&1
+"$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOINT" --nointeraction >"$DEBUGOUT" 2>&1
 # note that at the end of this the volume is automatically remounted at
 # /Volumes/Install macOS Monterey/ or the like, and leaves other crap mounted at
 # /Volumes/Shared Support or similar
@@ -242,8 +401,9 @@ SHADOW="$(plutil -create binary1 - -o - \
 	| plutil -insert 'SALTED-SHA512-PBKDF2.iterations' -integer "${user_iterations}" - -o - \
 	| plutil -insert 'SALTED-SHA512-PBKDF2.salt' -data "${user_salt}" - -o - \
 	| base64)"
-mkdir "$TEMPDIR"/headlessconfig
-cat >"$TEMPDIR"/headlessconfig/config.sh <<-EOF
+PACKAGEBUILD_DIR="$MKMACVM_TEMPDIR"/headlessconfig
+mkdir "$PACKAGEBUILD_DIR"
+cat >"$PACKAGEBUILD_DIR"/config.sh <<-EOF
 	#!/bin/sh
 
 	USERNAME="$USERNAME"
@@ -253,20 +413,20 @@ EOF
 
 echo "Creating post-installation configuration package..." >"$VERBOSEOUT"
 if [ -r ~/.ssh/id_ecdsa.pub ]; then
-	cp ~/.ssh/id_ecdsa.pub "$TEMPDIR"/headlessconfig/
+	cp ~/.ssh/id_ecdsa.pub "$PACKAGEBUILD_DIR"
 fi
 if [ -r "$(dirname "$0")"/postinstall ]; then
-	cp "$(dirname "$0")"/postinstall "$TEMPDIR"/headlessconfig
-	chmod 0755 "$TEMPDIR"/headlessconfig/postinstall
+	cp "$(dirname "$0")"/postinstall "$PACKAGEBUILD_DIR"
+	chmod 0755 "$PACKAGEBUILD_DIR"/postinstall
 fi
-pkgbuild --nopayload --scripts "$TEMPDIR"/headlessconfig/ --identifier \
-	headless-configuration "$TEMPDIR"/headless-configuration.pkg >"$DEBUGOUT"
-productbuild --package "$TEMPDIR"/headless-configuration.pkg \
-	"$TEMPDIR"/setup-headless-configuration.pkg >"$DEBUGOUT"
-cp "$TEMPDIR"/setup-headless-configuration.pkg "$INSTALLER_VOLUME"
+pkgbuild --nopayload --scripts "$PACKAGEBUILD_DIR" --identifier \
+	headless-configuration "$MKMACVM_TEMPDIR"/headless-configuration.pkg >"$DEBUGOUT"
+productbuild --package "$MKMACVM_TEMPDIR"/headless-configuration.pkg \
+	"$MKMACVM_TEMPDIR"/setup-headless-configuration.pkg >"$DEBUGOUT"
+cp "$MKMACVM_TEMPDIR"/setup-headless-configuration.pkg "$INSTALLER_VOLUME"
 
 hdiutil detach "$INSTALLER_VOLUME" >"$DEBUGOUT"
-chown "$USERNAME" "$TEMPDIR/$INSTALLER_IMAGENAME".dmg
+chown "$USERNAME" "$INSTALLER_IMAGEFILE"
 
 echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 # The VM can only be seen and modified by the creating
@@ -283,7 +443,7 @@ echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 		--adaptive-hypervisor on
 } >"$DEBUGOUT"
 VM_HOME="$(sudo -u "$USERNAME" prlctl list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
-mv "$TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
+mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
 {
 	sudo -u "$USERNAME" prlctl set "$VM_NAME" \
 		--device-set "cdrom0" \
@@ -304,58 +464,6 @@ echo '************************************************************'
 echo
 
 echo 'Waiting for installation to complete...' >"$VERBOSEOUT"
-VM_STATUS=""
-VM_ERROR=""
-VM_DONE=""
-vmIsRunning() {
-	VM_STATUS="$(sudo -u "$USERNAME" prlctl status "$VM_NAME")"
-	if [ -z "${VM_STATUS##VM "$VM_NAME" exist *}" ]; then # this is in the right format
-		VM_ERROR=""
-		if [ "stopped" = "${VM_STATUS##* }" ]; then # the last word is 'stopped'
-			if [ -z "$VM_DONE" ]; then                 # it might be rebooting; try one more time
-				VM_DONE=true
-				sleep 1
-				if ! vmIsRunning; then # nope, really done
-					return 1
-				else # false alarm
-					VM_DONE=""
-					return 0
-				fi
-			else # ah, this happened before
-				return 1
-			fi
-		else # everything looks good, and the last word isn't 'stopped'
-			return 0
-		fi
-	else                         # uh, that didn't work right
-		if [ -z "$VM_ERROR" ]; then # okay, it's the first time, try once more
-			VM_ERROR=true
-			sleep 1
-			vmIsRunning
-			case "$?" in
-				2) # yeah, it's real
-					return 2
-					;;
-				1) # what, now it's stopped? Fine.
-					return 1
-					;;
-				0) # yay, we recovered by just checking it again!
-					VM_ERROR=""
-					return 0
-					;;
-				*) # some other error, I guess
-					return 2 ;;
-			esac
-		else # we've been here before
-			return 2
-		fi
-	fi
-}
-waitForVmShutdown() {
-	while vmIsRunning; do
-		sleep 5
-	done
-}
 sshIsRunning() {
 	# returns error if not connectable, including
 	# if the hostname is not found
@@ -366,22 +474,24 @@ waitForSsh() {
 		sleep 5
 	done
 }
-
+waitForSshKey() {
+	until { sudo -u "$USERNAME" ssh -o StrictHostKeyChecking=no "$VM_HOSTNAME" true; } >"$DEBUGOUT" 2>&1; do
+		sleep 5
+	done
+}
 waitForSsh # which ensures the hostname is found and has port 22 open
 echo "Setting up local ssh access..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT"
-{ sudo -u "$USERNAME" ssh -o StrictHostKeyChecking=no "$VM_HOSTNAME" true; } >"$DEBUGOUT" 2>&1
-echo "Shutting down virtual machine..." >"$VERBOSEOUT"
-{ sudo -u "$USERNAME" prlctl stop "$VM_NAME"; } >"$DEBUGOUT"
-waitForVmShutdown
-echo "Removing installation disk image..." >"$VERBOSEOUT"
-{ sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"
+waitForSshKey
 
 echo "" >"$VERBOSEOUT"
+echo "********************************************" >"$VERBOSEOUT"
 echo "Done creating VM '$VM_NAME'. Start with:" >"$VERBOSEOUT"
 echo "prlctl start \"$VM_NAME\"" >"$VERBOSEOUT"
 echo "and access with:" >"$VERBOSEOUT"
 echo "ssh \"$VM_HOSTNAME\"" >"$VERBOSEOUT"
+echo "********************************************" >"$VERBOSEOUT"
+echo "" >"$VERBOSEOUT"
 
 #
 # Please see also https://github.com/therealchjones/mkmacvm/blob/main/LICENSE
