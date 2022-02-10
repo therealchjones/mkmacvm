@@ -1,7 +1,5 @@
 #!/bin/sh
 
-DEBUG=y
-
 MACOS_VERSION="12.2"
 INSTALLER="Install macOS Monterey"
 VM_NAME="macOS"
@@ -131,8 +129,8 @@ getInstallerVersion() {
 VM_ERROR=""
 VM_DONE=""
 vmIsRunning() {
-	if ! VM_STATUS="$(sudo -u "$USERNAME" prlctl status "$VM_NAME")" 2>"$DEBUGOUT"; then
-		return 1
+	if ! { VM_STATUS="$(sudo -u "$USERNAME" prlctl status "$VM_NAME")"; } 2>"$DEBUGOUT"; then
+		return 2
 	fi
 	if [ -z "${VM_STATUS##VM "$VM_NAME" exist *}" ]; then # this is in the right format
 		VM_ERROR=""
@@ -192,7 +190,7 @@ waitForVmShutdown() {
 cleanup() {
 	RETURNSTATUS=$?
 	if [ -n "$DEBUG" ] && [ "0" != "$RETURNSTATUS" ]; then
-		echo "Experienced error ($RETURNSTATUS) in debug mode." >"$DEBUGOUT"
+		echo "Caught error ($RETURNSTATUS) in debug mode." >"$DEBUGOUT"
 	else
 		echo "Cleaning up..." >"$VERBOSEOUT"
 	fi
@@ -249,7 +247,7 @@ cleanup() {
 			echo "New potentially corrupt VM left in place: $VM_NAME" >"$DEBUGOUT"
 		fi
 		LEFT=""
-		for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
+		for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$INSTALLER_IMAGEFILE" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
 			if mountpoint="$(isMounted "$volume")" 2>"$DEBUGOUT"; then
 				LEFT="$LEFT$mountpoint\n"
 			fi
@@ -357,10 +355,15 @@ INSTALLER_MOUNTPOINT="$MKMACVM_TEMPDIR/mountpoint"
 mkdir "$INSTALLER_MOUNTPOINT"
 INSTALLER_IMAGEFILE="$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME".dmg
 hdiutil create -o "$INSTALLER_IMAGEFILE" -size 16g -layout SPUD -fs HFS+J >"$DEBUGOUT"
-hdiutil attach "$INSTALLER_IMAGEFILE" -noverify -mountpoint "$MKMACVM_TEMPDIR/mountpoint" -nobrowse >"$DEBUGOUT"
+hdiutil attach "$INSTALLER_IMAGEFILE" -noverify -mountpoint "$INSTALLER_MOUNTPOINT" -nobrowse >"$DEBUGOUT"
 
 # createinstallmedia unfortunately sends normal progress output to stderr
-"$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOINT" --nointeraction >"$DEBUGOUT" 2>&1
+if ! createinstall_output="$("$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOINT" --nointeraction 2>&1)"; then
+	echo "$createinstall_output" >&2
+	echo "Unable to create the installation disk. Exiting." >&2
+	exit 1
+fi
+
 # note that at the end of this the volume is automatically remounted at
 # /Volumes/Install macOS Monterey/ or the like, and leaves other crap mounted at
 # /Volumes/Shared Support or similar
