@@ -280,6 +280,54 @@ cleanup() {
 	echo "Done." >"$VERBOSEOUT"
 	exit "$RETURNSTATUS"
 }
+getPrlSdkApi() {
+	prlSdkTempDir="$(mkTempDir prlSdk)" \
+		&& curl -L -o "$prlSdkTempDir"/prlsdk.dmg https://www.parallels.com/download/pvsdk17/ \
+		&& mountImage "$prlSdkTempDir"/prlsdk.dmg "$prlSdkTempDir/mp" \
+		&& pkgutil --expand "$prlSdkTempDir/mp/Parallels Virtualization SDK.pkg" "$prlSdkTempDir/package" \
+		&& mkdir "$prlSdkTempDir/payload" \
+		&& tar -xf prlsdk/"Parallels Virtualization SDK.pkg"/Payload -C "$prlSdkTempDir/payload" \
+		&& export PYTHONPATH="$prlSdkTempDir/payload/Library/Frameworks/ParallelsVirtualizationSDK.framework/Libraries/Python/3.7/:" \
+		&& export PRLSDKLIB="$prlSdkTempDir/payload/Library/Frameworks/ParallelsVirtualizationSDK.framework/Libraries/libprl_sdk.dylib"
+}
+mkRootTempDir() {
+	if [ -n "$MKMACVM_TEMPDIR" ]; then
+		echo "Temporary directory '$MKMACVM_TEMPDIR' already exists." >&2
+		return 1
+	else
+		MKMACVM_TEMPDIR="$(mktemp -d -t "$PROGRAMNAME")"
+	fi
+	if [ ! -d "$MKMACVM_TEMPDIR" ]; then
+		echo "Unable to access temporary directory '$MKMACVM_TEMPDIR'" >&2
+		return 1
+	fi
+	MKMACVM_OLDTMPDIR="${TMPDIR:-}"
+	MKMACVM_OLDDARWINTEMPDIR="${_CS_DARWIN_USER_TEMP_DIR:-}"
+	export _CS_DARWIN_USER_TEMP_DIR="$MKMACVM_TEMPDIR"
+	export TMPDIR="$MKMACVM_TEMPDIR"
+}
+mkTempDir() {
+	template="${1:-tmp}"
+	newTempDir="$(mktemp -d -t "$template")"
+	if [ -d "$newTempDir" ]; then
+		echo "$newTempDir"
+		return 0
+	else
+		echo "Unable to create temporary directory '$newTempDir'" >&2
+		return 1
+	fi
+}
+mountImage() {
+	if [ -z "$1" ] || [ -z "$2" ]; then
+		echo 'Usage: mountImage disk-image mount-point' >&2
+		return 1
+	fi
+	if ! hdiutil attach "$1" -readonly -nobrowse -mountpoint "$2" >"$DEBUGOUT"; then
+		echo "Unable to mount '$1' at '$2'." >&2
+		return 1
+	fi
+	MKMACVM_allDiskImages="$MKMACVM_allDiskImages$1\n"
+}
 trapforcleanup() {
 	# trap before adding anything to the disk
 	# make sure that functions called by the trap 'cleanup' function (and the functions
@@ -295,15 +343,18 @@ trapforcleanup() {
 	# script tries to delete /. So always assign the variables to be used early; in
 	# this case, the problem would have been prevented by assigning
 	# MKMACVM_TEMPDIR="" before setting the trap.
-
-	INSTALLER_IMAGEFILE=""
-	INSTALLER_MOUNTPOINT=""
-	PREEXISTINGINSTALLER=""
-	MKMACVM_TEMPDIR=""
-	VM_HOME=""
+	zeroVariables
 	trap cleanup EXIT
 }
+zeroVariables() {
+	INSTALLER_IMAGEFILE=""
+	INSTALLER_MOUNTPOINT=""
+	MKMACVM_TEMPDIR=""
+	PREEXISTINGINSTALLER=""
+	VM_HOME=""
+}
 trapforcleanup
+
 if [ -e "$INSTALLERAPP_PATH" ]; then
 	echo "Checking existing installer..." >"$VERBOSEOUT"
 	if [ ! -x "$CREATEINSTALL_PATH" ] \
