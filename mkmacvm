@@ -362,6 +362,8 @@ if ! createinstall_output="$("$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOI
 	echo "$createinstall_output" >&2
 	echo "Unable to create the installation disk. Exiting." >&2
 	exit 1
+else
+	echo "$createinstall_output" >"$DEBUGOUT"
 fi
 
 # note that at the end of this the volume is automatically remounted at
@@ -442,7 +444,7 @@ echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 		--smart-mount off --shared-cloud off \
 		--sh-app-guest-to-host off \
 		--sh-app-host-to-guest off \
-		--startup-view window \
+		--startup-view headless \
 		--adaptive-hypervisor on
 } >"$DEBUGOUT"
 VM_HOME="$(sudo -u "$USERNAME" prlctl list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
@@ -455,22 +457,42 @@ mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
 } >"$DEBUGOUT"
 
 echo "Starting virtual machine..." >"$VERBOSEOUT"
-osascript -e 'tell application "Parallels Desktop" to activate'
 { sudo -u "$USERNAME" prlctl start "$VM_NAME"; } >"$DEBUGOUT"
-echo
-echo '************* USER INTERACTION REQUIRED ********************'
-echo 'Virtual machine starting. Once it boots, choose a language.'
-echo 'Then, open a terminal with keystrokes shift-cmd-T or via the'
-echo '"Utilities" menu. Run:'
-echo '/Volumes/Image Volume/install'
-echo '************************************************************'
-echo
 
+echo 'Waiting for new virtual machine to start...' >"$VERBOSEOUT"
+getIpAddress() {
+	if ! ipaddress="$(
+		{ sudo -u "$USERNAME" prlctl list -f "$VM_NAME"; } \
+			| sed -E -n "/$VM_NAME"'$/{s/^.+[[:space:]]+([-.0-9]+)[[:space:]]+.+$/\1/;p;}'
+	)" || [ "-" = "$ipaddress" ]; then
+		return 1
+	else
+		echo "$ipaddress"
+	fi
+}
+waitForNetwork() {
+	until VM_IPADDRESS="$(getIpAddress)"; do
+		sleep 5
+	done
+}
+waitForNetwork
+echo 'Starting installation...' >"$VERBOSEOUT"
+if ! sudo -u "$USERNAME" \
+	SDK_LIBRARY="/Users/chjones/Development/mkmacvm/prlsdkapi/Library/Frameworks/ParallelsVirtualizationSDK.framework/ParallelsVirtualizationSDK" \
+	VM_NAME="$VM_NAME" \
+	INSTALL_COMMAND='"/Volumes/Image Volume/install"' \
+	python3 ./startinstall.py; then
+	echo 'Unable to start macOS installation.' >&2
+	exit 1
+fi
 echo 'Waiting for installation to complete...' >"$VERBOSEOUT"
 sshIsRunning() {
+	if [ -n "$VM_IPADDRESS" ]; then
+		waitForNetwork
+	fi
 	# returns error if not connectable, including
 	# if the hostname is not found
-	nc -z "$VM_HOSTNAME" 22 >"$DEBUGOUT" 2>&1
+	nc -z "$VM_IPADDRESS" 22 >"$DEBUGOUT" 2>&1
 }
 waitForSsh() {
 	until sshIsRunning; do
@@ -487,12 +509,15 @@ echo "Setting up local ssh access..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT"
 waitForSshKey
 
+{ sudo -u "$USERNAME" prlctl set "$VM_NAME" --startup-view window; } >"$DEBUGOUT"
+
 echo "" >"$VERBOSEOUT"
 echo "********************************************" >"$VERBOSEOUT"
 echo "Done creating VM '$VM_NAME'. Start with:" >"$VERBOSEOUT"
 echo "prlctl start \"$VM_NAME\"" >"$VERBOSEOUT"
 echo "and access with:" >"$VERBOSEOUT"
 echo "ssh \"$VM_HOSTNAME\"" >"$VERBOSEOUT"
+echo "To use the GUI, open Parallels Desktop" >"$VERBOSEOUT"
 echo "********************************************" >"$VERBOSEOUT"
 echo "" >"$VERBOSEOUT"
 
