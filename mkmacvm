@@ -207,13 +207,18 @@ cleanup() {
 			if [ "0" = "$RETURNSTATUS" ]; then
 				echo "Shutting down virtual machine..." >"$VERBOSEOUT"
 				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME"; } >"$DEBUGOUT"
-				echo "Removing installation disk image from virtual machine..." >"$VERBOSEOUT"
-				{ sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"
 			else
 				echo "Forcefully shutting down virtual machine..." >"$VERBOSEOUT"
 				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME" --kill; } >"$DEBUGOUT"
 			fi
 			waitForVmShutdown
+		fi
+		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >$DEBUGOUT 2>&1; then
+			echo "Removing installation disk image from virtual machine..." >"$VERBOSEOUT"
+			if ! { sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"; then
+				echo "Unable to remove installation disk image from virtual machine." >&2
+				RETURNSTATUS=1
+			fi
 		fi
 		echo "Unmounting temporary drives..." >"$VERBOSEOUT"
 		for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
@@ -478,7 +483,14 @@ waitForSsh() {
 	done
 }
 waitForSshKey() {
-	until { sudo -u "$USERNAME" ssh -o StrictHostKeyChecking=no "$VM_HOSTNAME" true; } >"$DEBUGOUT" 2>&1; do
+	# Use -t here to allocate a terminal so it's logged in system.log and the
+	# installer program can tell that we logged on
+	until {
+		sudo -u "$USERNAME" \
+			ssh -t -o StrictHostKeyChecking=no \
+			-o ConnectTimeout=5 "$VM_HOSTNAME"
+		true
+	} >"$DEBUGOUT" 2>&1; do
 		sleep 5
 	done
 }
@@ -486,6 +498,11 @@ waitForSsh # which ensures the hostname is found and has port 22 open
 echo "Setting up local ssh access..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT"
 waitForSshKey
+
+echo "Shutting down the virtual machine..." >"$VERBOSEOUT"
+while vmIsRunning; do
+	sleep 5
+done
 
 echo "" >"$VERBOSEOUT"
 echo "********************************************" >"$VERBOSEOUT"
