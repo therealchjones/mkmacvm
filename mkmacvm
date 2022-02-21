@@ -302,6 +302,7 @@ trapforcleanup() {
 	# MKMACVM_TEMPDIR="" before setting the trap.
 
 	INSTALLER_IMAGEFILE=""
+	INSTALLER_IMAGENAME=""
 	INSTALLER_MOUNTPOINT=""
 	PREEXISTINGINSTALLER=""
 	MKMACVM_TEMPDIR=""
@@ -363,7 +364,12 @@ hdiutil create -o "$INSTALLER_IMAGEFILE" -size 16g -layout SPUD -fs HFS+J >"$DEB
 hdiutil attach "$INSTALLER_IMAGEFILE" -noverify -mountpoint "$INSTALLER_MOUNTPOINT" -nobrowse >"$DEBUGOUT"
 
 # createinstallmedia unfortunately sends normal progress output to stderr
-if ! createinstall_output="$("$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOINT" --nointeraction 2>&1)"; then
+# this kludge allows us to monitor all output in debug mode but save the
+# output to display in all modes in case there's an error
+if ! createinstall_output="$(
+	"$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOINT" --nointeraction 2>&1 \
+		| tee -a /dev/stderr
+)" 2>"$DEBUGOUT"; then
 	echo "$createinstall_output" >&2
 	echo "Unable to create the installation disk. Exiting." >&2
 	exit 1
@@ -488,8 +494,8 @@ waitForSshKey() {
 	until {
 		sudo -u "$USERNAME" \
 			ssh -t -o StrictHostKeyChecking=no \
-			-o ConnectTimeout=5 "$VM_HOSTNAME"
-		true
+			-o ConnectTimeout=5 "$VM_HOSTNAME" \
+			true
 	} >"$DEBUGOUT" 2>&1; do
 		sleep 5
 	done
