@@ -1,6 +1,6 @@
 #!/bin/sh
 
-MACOS_VERSION="12.2"
+MACOS_VERSION="12.2.1"
 INSTALLER="Install macOS Monterey"
 VM_NAME="macOS"
 VM_HOSTNAME="macos.shared"
@@ -24,7 +24,6 @@ else
 fi
 
 INSTALLERAPP_PATH="/Applications/$INSTALLER.app"
-CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
 INSTALLER_VOLUME="/Volumes/$INSTALLER"
 SHAREDSUPPORT_VOLUME="/Volumes/Shared Support"
 
@@ -119,11 +118,58 @@ if isMounted "$SHAREDSUPPORT_VOLUME" >"$DEBUGOUT" 2>&1; then
 	exit 1
 fi
 
+getCreateInstall() {
+	if [ -z "$INSTALLERAPP_PATH" ] \
+		|| [ ! -r "$INSTALLERAPP_PATH"/Contents/Resources/createinstallmedia ]; then
+		echo Expected to find createinstallmedia at >&2
+		echo "$INSTALLERAPP_PATH"/Contents/Resources/createinstallmedia, >&2
+		echo but found none. >&2
+		return 1
+	fi
+	echo "$INSTALLERAPP_PATH"/Contents/Resources/createinstallmedia
+	return 0
+}
 getInstallerVersion() {
-	if [ -z "$1" ]; then return; fi
-	if [ ! -r "$1" ]; then return; fi
-	grep -a -A 1 DTPlatformVersion "$1" \
-		| sed -n -E '2s#^.*>(.*)</.*$#\1#p'
+	sharedSupport=""
+	if ! sharedSupport="$(getInstallerSharedSupport)" \
+		|| [ -z "$sharedSupport" ] \
+		|| [ ! -r "$sharedSupport" ]; then
+		echo "$sharedSupport"
+		echo Unable to find SharedSupport image. >&2
+		return 1
+	fi
+	output=""
+	if [ -z "$MKMACVM_TEMPDIR" ] \
+		|| ! mkdir -p "$MKMACVM_TEMPDIR"/SharedSupport \
+		|| ! output="$(hdiutil attach -nobrowse -readonly -mountpoint \
+			"$MKMACVM_TEMPDIR"/SharedSupport "$sharedSupport")"; then
+		echo "$output"
+		echo Unable to mount SharedSupport image. >&2
+		return 1
+	fi
+	version=""
+	if ! version="$(plutil -extract Assets.0.OSVersion raw \
+		"$MKMACVM_TEMPDIR"/SharedSupport/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml \
+		-o -)"; then
+		echo "$version"
+		echo Unable to determine installer version. >&2
+		return 1
+	fi
+	echo "$version"
+	return 0
+
+}
+getInstallerSharedSupport() {
+	if [ -z "$INSTALLERAPP_PATH" ]; then
+		echo "Installer program is not defined." >&2
+		return 1
+	fi
+	if [ -e "$INSTALLERAPP_PATH"/Contents/SharedSupport/SharedSupport.dmg ]; then
+		echo "$INSTALLERAPP_PATH"/Contents/SharedSupport/SharedSupport.dmg
+		return 0
+	fi
+	echo "$INSTALLERAPP_PATH"/Contents/SharedSupport/SharedSupport.dmg not found. >&2
+	return 1
 }
 
 VM_ERROR=""
@@ -221,7 +267,12 @@ cleanup() {
 			fi
 		fi
 		echo "Unmounting temporary drives..." >"$VERBOSEOUT"
-		for volume in "$SHAREDSUPPORT_VOLUME" "$INSTALLER_VOLUME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
+		for volume in \
+			"$MKMACVM_TEMPDIR"/SharedSupport \
+			"$SHAREDSUPPORT_VOLUME" \
+			"$INSTALLER_VOLUME" \
+			"$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" \
+			"$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
 			hdiutil detach "$volume" >"$DEBUGOUT" 2>&1 || true
 		done
 		echo "Removing temporary files..." >"$VERBOSEOUT"
@@ -310,10 +361,14 @@ trapforcleanup() {
 	trap cleanup EXIT
 }
 trapforcleanup
+echo Making temporary directory... >"$VERBOSEOUT"
+if ! MKMACVM_TEMPDIR="$(mktemp -d -t "mkmacvm")" || [ -z "$MKMACVM_TEMPDIR" ]; then
+	echo "Unable to create temporary directory. Exiting." >&2
+	exit 1
+fi
 if [ -e "$INSTALLERAPP_PATH" ]; then
 	echo "Checking existing installer..." >"$VERBOSEOUT"
-	if [ ! -x "$CREATEINSTALL_PATH" ] \
-		|| [ "$MACOS_VERSION" != "$(getInstallerVersion "$CREATEINSTALL_PATH")" ]; then
+	if [ "$MACOS_VERSION" != "$(getInstallerVersion)" ]; then
 		echo 'A macOS installation app for a different macOS version already' >&2
 		echo "exists at $INSTALLERAPP_PATH." >&2
 		echo "That makes things confusing. Move that app somewhere else (or " >&2
@@ -324,23 +379,22 @@ if [ -e "$INSTALLERAPP_PATH" ]; then
 	fi
 	PREEXISTINGINSTALLER=y
 else
-	echo "Finding or downloading macOS installer..." >"$VERBOSEOUT"
+	echo "Getting macOS installer..." >"$VERBOSEOUT"
 	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"
 	sleep 5
-	if installer_pid="$(pgrep -n osinstallersetupd)"; then # softwareupdate found an installer on the disk
+	if installer_pid="$(pgrep -n osinstallersetupd)"; then
+		# softwareupdate found an installer somewhere else on the disk
 		echo "Closing installer GUI..." >"$VERBOSEOUT"
 		installer_path="$(ps -o comm= "$installer_pid")"
 		INSTALLERAPP_PATH="${installer_path%/Contents/Frameworks/OSInstallerSetup.framework/Resources/osinstallersetupd}"
-		CREATEINSTALL_PATH="$INSTALLERAPP_PATH/Contents/Resources/createinstallmedia"
 		killall InstallAssistant
 		PREEXISTINGINSTALLER=y
 	fi
-	if ! [ -r "$CREATEINSTALL_PATH" ]; then
-		echo "'createinstallmedia' should be at '$CREATEINSTALL_PATH'," >&2
-		echo "but it couldn't be found. Exiting." >&2
+	if ! "$(getCreateInstall)"; then
+		echo "Unable to find createinstallmedia. Exiting." >&2
 		exit 1
 	fi
-	checkedVersion="$(getInstallerVersion "$CREATEINSTALL_PATH")"
+	checkedVersion="$(getInstallerVersion)"
 	if [ "$MACOS_VERSION" != "$checkedVersion" ]; then
 		echo "The installer app found at $INSTALLERAPP_PATH" >&2
 		echo "appears to be for macOS version $checkedVersion rather than $MACOS_VERSION." >&2
@@ -349,12 +403,6 @@ else
 	fi
 fi
 INSTALLER_IMAGENAME="$(basename "${INSTALLERAPP_PATH}" ".app")"
-
-echo Making temporary directory... >"$VERBOSEOUT"
-if ! MKMACVM_TEMPDIR="$(mktemp -d -t "mkmacvm")" || [ "$MKMACVM_TEMPDIR" = "" ]; then
-	echo "Unable to create temporary directory. Exiting." >&2
-	exit 1
-fi
 
 echo "Creating virtual installation disk..." >"$VERBOSEOUT"
 INSTALLER_MOUNTPOINT="$MKMACVM_TEMPDIR/mountpoint"
@@ -367,12 +415,12 @@ hdiutil attach "$INSTALLER_IMAGEFILE" -noverify -mountpoint "$INSTALLER_MOUNTPOI
 # this kludge allows us to monitor all output in debug mode but save the
 # output to display in all modes in case there's an error
 if [ -n "$DEBUG" ]; then
-	if ! "$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOINT" --nointeraction >"$DEBUGOUT" 2>&1; then
+	if ! "$(getCreateInstall)" --volume "$INSTALLER_MOUNTPOINT" --nointeraction >"$DEBUGOUT" 2>&1; then
 		echo "Unable to create installation disk. Exiting." >&2
 		exit 1
 	fi
 else
-	if ! createinstall_output="$("$CREATEINSTALL_PATH" --volume "$INSTALLER_MOUNTPOINT" --nointeraction 2>&1)"; then
+	if ! createinstall_output="$("$(getCreateInstall)" --volume "$INSTALLER_MOUNTPOINT" --nointeraction 2>&1)"; then
 		echo "$createinstall_output" >&2
 		echo "Unable to create the installation disk. Exiting." >&2
 		exit 1

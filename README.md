@@ -42,12 +42,14 @@ To meet these aims, `mkmacvm` should:
   command line (e.g., for scripting and testing)
 - itself support a command-line interface (to allow easy inclusion in scripts)
 - by default run silently without user interaction
-- not be configurable (beyond variable text or display output) by the end user
+- not have options for configuring the virtual machine by the end user (i.e.,
+  changing display or text output or the name of the virtual machine is
+  acceptable)
 - not require software other than macOS, itself, and the virtual machine
   software
 - not leave unnecessary remnants (such as temporary files, `mkmacvm`
   preferences, etc.) on the host machine
-- not unnecessarily change the host system, and not to change the host system in
+- not unnecessarily change the host system, and not change the host system in
   user-visible ways without interaction
 - be a single executable (or script or bundle or similar)
 - within the limits of the above, leave virtual machine and macOS system
