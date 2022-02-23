@@ -16,7 +16,7 @@
 			"type": "f5anything",
 			"request": "launch",
 			"command": "sudo ./mkmacvm",
-			"terminalName": "${command}"
+			"terminalName": "mkmacvm"
 		}
 	]
 }

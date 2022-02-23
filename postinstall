@@ -99,13 +99,28 @@ chown "$USERNAME" "${USER_HOME}/Library/Preferences"
 chown "$USERNAME" "$SETUPPREFS".plist
 
 echo Updating macOS... >"$VERBOSEOUT"
-# apparently need to get network up first
-#/usr/sbin/softwareupdate -i -a
+# need to wait for the network to start first
+ipaddress=""
+until [ -n "$ipaddress" ]; do
+	sleep 5
+	ipaddress="$(
+		ifconfig en0 inet \
+			| grep inet \
+			| sed 's/^[[:space:]]*inet[[:space:]]+\([\.0-9]+\)[[:space:]]+.*$/\1/'
+	)"
+done
+until softwareupdate -i -r >"$DEBUGOUT" 2>&1; do
+	sleep 5
+done
 
 echo Starting the SSH server... >"$VERBOSEOUT"
-/bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+until grep "sshd: $USERNAME" /var/log/system.log >$DEBUGOUT 2>&1; do
+	sleep 5
+done
 
-echo Completed "$0" >"$VERBOSEOUT"
+echo Completed "$0". Shutting down. >"$VERBOSEOUT"
+shutdown -h +2
 
 #
 # Please see also https://github.com/therealchjones/mkmacvm/blob/main/LICENSE
