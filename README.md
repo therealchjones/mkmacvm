@@ -1,7 +1,6 @@
 # `mkmacvm`
 
-Build a simple macOS virtual machine for Parallels Desktop with minimal
-interaction
+Build a simple macOS virtual machine for Parallels Desktop without interaction
 
 ## Requirements
 
@@ -22,14 +21,7 @@ and Parallels Desktop Pro.
    sudo ./mkmacvm
    ```
 
-2. When prompted, within the new virtual machine, choose a language, then open a
-   terminal and run:
-
-   ```shell
-   /Volumes/Image Volume/install
-   ```
-
-3. There is no step 3.
+2. There is no step 2.
 
 ## Aims
 
@@ -53,7 +45,7 @@ To meet these aims, `mkmacvm` should:
   user-visible ways without interaction
 - be a single executable (or script or bundle or similar)
 - within the limits of the above, leave virtual machine and macOS system
-  settings in the default state
+  settings in their default states
 
 ## FAQ
 
@@ -63,7 +55,7 @@ To meet these aims, `mkmacvm` should:
   Error erasing disk error number (22, 0) An error occurred erasing the disk.
   ```
 
-  I have no idea. I don't know what it means or why it happens. However, thanks
+  I don't know. I don't know what it means or why it happens. However, thanks
   to
   [this post](https://www.blackmanticore.com/659444a81916ef87765c979e4231753d),
   I can tell you that it likely happened after a previous attempt failed, and I
