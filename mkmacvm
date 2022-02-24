@@ -117,7 +117,40 @@ if isMounted "$SHAREDSUPPORT_VOLUME" >"$DEBUGOUT" 2>&1; then
 	echo "then try $PROGRAMNAME again." >&2
 	exit 1
 fi
-
+downloadParallelsSdk() {
+	if [ -z "$MKMACVM_TEMPDIR" ] \
+		|| ! mkdir -p "$MKMACVM_TEMPDIR"/prlsdkmount \
+		|| ! mkdir -p "$MKMACVM_TEMPDIR"/prlsdkapi; then
+		echo "Unable to access temporary directory" >&2
+		return 1
+	fi
+	if ! curl -sS -L -o "$MKMACVM_TEMPDIR"/prl.dmg https://www.parallels.com/download/pvsdk17/; then
+		echo "Unable to download Parallels SDK." >&2
+		return 1
+	fi
+	if ! hdiutil attach "$MKMACVM_TEMPDIR"/prl.dmg \
+		-mountpoint "$MKMACVM_TEMPDIR"/prlsdkmount -readonly -nobrowse >"$DEBUGOUT" \
+		|| ! pkgutil --expand \
+			"$MKMACVM_TEMPDIR/prlsdkmount/Parallels Virtualization SDK.pkg" \
+			"$MKMACVM_TEMPDIR"/prlsdkpkg \
+		|| ! tar -x -C "$MKMACVM_TEMPDIR"/prlsdkapi \
+			-f "$MKMACVM_TEMPDIR/prlsdkpkg/Parallels Virtualization SDK.pkg/Payload"; then
+		echo "Invalid Parallels SDK Download." >&2
+		return 1
+	fi
+	if ! pyInit="$(find "$MKMACVM_TEMPDIR/prlsdkapi" -type f \
+		-iregex '.*python.*3\..*/prlsdkapi/__init__.py' \
+		| sed -n '1{s#/prlsdkapi/__init__\.py$##;p;}')" \
+		|| [ -z "$pyInit" ] \
+		|| ! PRLSDKLIB="$(find "$MKMACVM_TEMPDIR/prlsdkapi" -type f \
+			-name ParallelsVirtualizationSDK | head -n1)" \
+		|| [ -z "$PRLSDKLIB" ]; then
+		echo "Invalid Parallels SDK directory hierarchy." >&2
+		return 1
+	fi
+	PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$pyInit"
+	return 0
+}
 getCreateInstall() {
 	if [ -z "$INSTALLERAPP_PATH" ] \
 		|| [ ! -r "$INSTALLERAPP_PATH"/Contents/Resources/createinstallmedia ]; then
@@ -272,6 +305,7 @@ cleanup() {
 			"$SHAREDSUPPORT_VOLUME" \
 			"$INSTALLER_VOLUME" \
 			"$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" \
+			"$MKMACVM_TEMPDIR"/prlsdkmount \
 			"$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
 			hdiutil detach "$volume" >"$DEBUGOUT" 2>&1 || true
 		done
@@ -362,7 +396,7 @@ trapforcleanup() {
 }
 trapforcleanup
 echo Making temporary directory... >"$VERBOSEOUT"
-if ! MKMACVM_TEMPDIR="$(mktemp -d -t "mkmacvm")" || [ -z "$MKMACVM_TEMPDIR" ]; then
+if ! MKMACVM_TEMPDIR="$(sudo -u "$USERNAME" mktemp -d -t "mkmacvm")" || [ -z "$MKMACVM_TEMPDIR" ]; then
 	echo "Unable to create temporary directory. Exiting." >&2
 	exit 1
 fi
@@ -403,6 +437,11 @@ else
 	fi
 fi
 INSTALLER_IMAGENAME="$(basename "${INSTALLERAPP_PATH}" ".app")"
+echo "Downloading tools..." >"$VERBOSEOUT"
+if ! downloadParallelsSdk; then
+	echo "The Parallels SDK is required. Exiting." >&2
+	exit 1
+fi
 
 echo "Creating virtual installation disk..." >"$VERBOSEOUT"
 INSTALLER_MOUNTPOINT="$MKMACVM_TEMPDIR/mountpoint"
@@ -539,10 +578,11 @@ waitForNetwork() {
 waitForNetwork
 echo 'Starting installation...' >"$VERBOSEOUT"
 if ! sudo -u "$USERNAME" \
-	SDK_LIBRARY="/Users/chjones/Development/mkmacvm/prlsdkapi/Library/Frameworks/ParallelsVirtualizationSDK.framework/ParallelsVirtualizationSDK" \
+	PYTHONPATH="$PYTHONPATH" \
+	SDK_LIBRARY="$PRLSDKLIB" \
 	VM_NAME="$VM_NAME" \
 	INSTALL_COMMAND='"/Volumes/Image Volume/install"' \
-	python3 ./startinstall.py; then
+	python3 "$(dirname "$0")"/startinstall.py; then
 	echo 'Unable to start macOS installation.' >&2
 	exit 1
 fi
@@ -589,7 +629,7 @@ echo "Done creating VM '$VM_NAME'. Start with:" >"$VERBOSEOUT"
 echo "prlctl start \"$VM_NAME\"" >"$VERBOSEOUT"
 echo "and access with:" >"$VERBOSEOUT"
 echo "ssh \"$VM_HOSTNAME\"" >"$VERBOSEOUT"
-echo "To use the GUI, open Parallels Desktop" >"$VERBOSEOUT"
+echo "To use the GUI, open Parallels Desktop." >"$VERBOSEOUT"
 echo "********************************************" >"$VERBOSEOUT"
 echo "" >"$VERBOSEOUT"
 
