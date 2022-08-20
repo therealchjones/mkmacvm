@@ -49,6 +49,16 @@ USERNAME="$SUDO_USER"
 USERREALNAME="$(id -F "$USERNAME")"
 USERREALNAME="${USERREALNAME:-"$USERNAME"}"
 
+# Check for required programs
+if ! type prlctl >"$DEBUGOUT"; then
+	echo "'prlctl' was not found; $PROGRAMNAME requires Parallels Desktop Pro." >&2
+	exit 1
+fi
+if ! python3 --version >"$DEBUGOUT" 2>&1; then
+	echo "Python 3 is not installed; $PROGRAMNAME requires Python 3." >&2
+	exit 1
+fi
+
 # Make sure some things are not already running or in place, so that they
 # can be monitored or shut down later without messing with the system as
 # currently running.
@@ -431,7 +441,7 @@ else
 		killall InstallAssistant
 		PREEXISTINGINSTALLER=y
 	fi
-	if ! "$(getCreateInstall)" >/dev/null; then
+	if ! getCreateInstall >"$DEBUGOUT"; then
 		echo "Unable to find createinstallmedia. Exiting." >&2
 		exit 1
 	fi
