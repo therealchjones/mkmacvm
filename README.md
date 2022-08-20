@@ -1,17 +1,19 @@
-# `mkmacvm`
+# mkmacvm
 
 Build a simple macOS virtual machine for Parallels Desktop without interaction
 
 ## Requirements
 
-`mkmacvm` is designed to work with:
+mkmacvm is designed to work with:
 
-- macOS 12.2.1 Monterey
-- Paralells Desktop Pro 17
+- macOS 12.5.1 Monterey
+- Paralells Desktop Pro 18
 
-`mkmacvm` may work with older or alternative versions of the above software, but
-each release of `mkmacvm` is only tested with its contemporary versions of macOS
+mkmacvm may work with older or alternative versions of the above software, but
+each release of mkmacvm is only tested with its contemporary versions of macOS
 and Parallels Desktop Pro.
+
+Additionally, mkmacvm requires a working `python3` in the path.
 
 ## Usage
 
@@ -25,21 +27,19 @@ and Parallels Desktop Pro.
 
 ## Aims
 
-`mkmacvm` will provide a simple program that creates a macOS virtual machine on
+mkmacvm will provide a simple program that creates a macOS virtual machine on
 a macOS host without user interaction beyond initiation.
 
-To meet these aims, `mkmacvm` should:
+To meet these aims, mkmacvm should:
 
 - create a macOS virtual machine that is easily accessed and configured from the
   command line (e.g., for scripting and testing)
 - itself support a command-line interface (to allow easy inclusion in scripts)
 - by default run silently without user interaction
-- not have options for configuring the virtual machine by the end user (i.e.,
-  changing display or text output or the name of the virtual machine is
-  acceptable)
+- support very limited options (see #38)
 - not require software other than macOS, itself, and the virtual machine
   software
-- not leave unnecessary remnants (such as temporary files, `mkmacvm`
+- not leave unnecessary remnants (such as temporary files, mkmacvm
   preferences, etc.) on the host machine
 - not unnecessarily change the host system, and not change the host system in
   user-visible ways without interaction
