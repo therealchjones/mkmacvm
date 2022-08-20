@@ -1,9 +1,9 @@
 #!/bin/sh
 
-MACOS_VERSION="12.2.1"
+MACOS_VERSION="12.5.1"
 INSTALLER="Install macOS Monterey"
-VM_NAME="macOS"
-VM_HOSTNAME="macos.shared"
+VM_NAME="macvm"
+VM_HOSTNAME="macvm.shared"
 
 DEBUG="${DEBUG:-}"
 VERBOSE="${VERBOSE:-}"
@@ -30,6 +30,11 @@ SHAREDSUPPORT_VOLUME="/Volumes/Shared Support"
 PROGRAMNAME="$(basename "$0")"
 
 # Make sure mkmacvm is being run properly
+if [ "0" != "$#" ]; then
+	echo "$PROGRAMNAME does not accept any arguments." >&2
+	echo "Run as 'sudo \"$0\"'." >&2
+	exit 1
+fi
 if [ "0" != "$(id -u)" ]; then
 	echo "$PROGRAMNAME requires administrator privileges for several portions." >&2
 	echo "Run as 'sudo \"$0\"'." >&2
@@ -339,7 +344,7 @@ cleanup() {
 		LEFT=""
 		for volume in "$SHAREDSUPPORT_VOLUME" \
 			"$INSTALLER_VOLUME" \
-			"$MKMACVM_TEMP/$INSTALLER_IMAGENAME.dmg" \
+			"$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" \
 			"$VM_HOME/$INSTALLER_IMAGENAME.dmg"; do
 			if mountpoint="$(isMounted "$volume")" 2>"$DEBUGOUT"; then
 				LEFT="$LEFT$mountpoint\n"
@@ -426,7 +431,7 @@ else
 		killall InstallAssistant
 		PREEXISTINGINSTALLER=y
 	fi
-	if ! "$(getCreateInstall)"; then
+	if ! "$(getCreateInstall)" >/dev/null; then
 		echo "Unable to find createinstallmedia. Exiting." >&2
 		exit 1
 	fi
@@ -448,8 +453,8 @@ fi
 echo "Creating virtual installation disk..." >"$VERBOSEOUT"
 INSTALLER_MOUNTPOINT="$MKMACVM_TEMPDIR/mountpoint"
 mkdir "$INSTALLER_MOUNTPOINT"
-hdiutil create -o "$MKMACVM_TEMP/$INSTALLER_IMAGENAME.dmg" -size 16g -layout SPUD -fs HFS+J >"$DEBUGOUT"
-hdiutil attach "$MKMACVM_TEMP/$INSTALLER_IMAGENAME.dmg" -noverify -mountpoint "$INSTALLER_MOUNTPOINT" -nobrowse >"$DEBUGOUT"
+hdiutil create -o "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" -size 16g -layout SPUD -fs HFS+J >"$DEBUGOUT"
+hdiutil attach "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" -noverify -mountpoint "$INSTALLER_MOUNTPOINT" -nobrowse >"$DEBUGOUT"
 
 # createinstallmedia unfortunately sends normal progress output to stderr
 # this kludge allows us to monitor all output in debug mode but save the
@@ -532,7 +537,7 @@ productbuild --package "$MKMACVM_TEMPDIR"/headless-configuration.pkg \
 cp "$MKMACVM_TEMPDIR"/setup-headless-configuration.pkg "$INSTALLER_VOLUME"
 
 hdiutil detach "$INSTALLER_VOLUME" >"$DEBUGOUT"
-chown "$USERNAME" "$MKMACVM_TEMP/$INSTALLER_IMAGENAME.dmg"
+chown "$USERNAME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg"
 
 echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 # The VM can only be seen and modified by the creating
@@ -549,7 +554,7 @@ echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 		--adaptive-hypervisor on
 } >"$DEBUGOUT"
 VM_HOME="$(sudo -u "$USERNAME" prlctl list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
-mv "$MKMACVM_TEMP/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
+mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
 {
 	sudo -u "$USERNAME" prlctl set "$VM_NAME" \
 		--device-set "cdrom0" \
