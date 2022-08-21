@@ -556,12 +556,9 @@ echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 {
 	sudo -u "$USERNAME" prlctl set "$VM_NAME" --cpus auto --memsize auto \
 		--auto-share-camera off \
-		--nested-virt on \
 		--smart-mount off --shared-cloud off \
 		--sh-app-guest-to-host off \
-		--sh-app-host-to-guest off \
-		--startup-view headless \
-		--adaptive-hypervisor on
+		--sh-app-host-to-guest off
 } >"$DEBUGOUT"
 VM_HOME="$(sudo -u "$USERNAME" prlctl list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
 mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"

@@ -1,0 +1,182 @@
+#!/bin/sh
+
+# Run mkmacvm on the current "host" machine to create a new virtual machine,
+# then run mkmacvm on that new virtual machine to create a "nested" virtual
+# machine. This ensures proper functionality and minimum requirements beyond the
+# default installation.
+#
+# Requires running this script from a terminal (for example, on the local
+# machine or via ssh -t) to build the nested virtual machine, as mkmacvm does
+# not use passwordless sudo by default. If not at a terminal, mkmacvm will be
+# tested but the second step, which installs requirements and creates the nested
+# virtual machine, will be skipped.
+#
+# System effects of this script:
+#
+# mkmacvm itself creates and configures a new Parallels virtual machine on the
+# system where it's run, but attempts to make no other persistent changes on
+# that system and to clean up after itself even if it fails. This test script
+# may leave that virtual machine in the "running" state, but attempts to make no
+# other changes to the system where it's run in most cases.
+#
+# If this script is run in an environment where the environment variable "CI" is
+# set to "true" and requirements for mkmacvm (specifically, Python 3 and
+# Parallels Desktop) are not available, they will be installed, but no attempts
+# to clean up their artifacts will be made afterward.
+#
+# If a nested virtual machine is created, additional changes to the first
+# virtual machine will be made, and no attempts will be made to clean up
+# artifacts on that first virtual machine.
+
+set -e
+set -u
+
+parallelsurl="https://download.parallels.com/desktop/v18/18.0.0-53049/ParallelsDesktop-18.0.0-53049.dmg"
+parallelsfile="${parallelsurl##*/}"
+username="$SUDO_USER"
+
+main() {
+	programname="$(basename "$0")"
+	programdirectory="$(dirname "$0")"
+	echo "Testing mkmacvm"
+	if [ "0" != "$(id -u)" ] || [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
+		echo "Error: '$programname' should be run as a regular user with 'sudo'." >&2
+		echo "       Try 'sudo \"$0\"'." >&2
+		exit 1
+	fi
+	if [ ! -e "$programdirectory/mkmacvm" ]; then
+		echo "Error: cannot run '$programdirectory/mkmacvm'" >&2
+		exit 1
+	fi
+	if ! atTerminal; then
+		# unable to input password, so we won't be able to run mkmacvm on the
+		# newly-created virtual machine, since we can't make it use passwordless
+		# sudo without first using sudo on the new virtual machine
+		echo "Warning: not at terminal. Will not perform nested test." >&2
+	fi
+	echo "Checking for Parallels command line tool"
+	if ! prlctl --version; then
+		echo "Parallels Desktop not found."
+		if [ "true" = "$CI" ]; then
+			echo "In CI environment. Attempting to install Parallels Desktop"
+			if ! installParallels; then
+				echo "Error: Unable to install Parallels Desktop" >&2
+				exit 1
+			fi
+		else
+			echo "Error: Parallels Desktop is required for mkmacvm" >&2
+			exit 1
+		fi
+	fi
+	VERBOSE=y "$programdirectory"/mkmacvm || exit 1
+	if ! atTerminal; then
+		echo "Warning: skipping nested test" >&2
+		exit 0
+	else
+		echo "Enabling nested virtualization for new virtual machine"
+		sudo -u "$username" prlctl set macvm --nested-virt on >/dev/null || exit 1
+		echo "Starting new virtual machine"
+		sudo -u "$username" prlctl start macvm >/dev/null || exit 1
+	fi
+	echo "Configuring new virtual machine"
+	tries=30
+	while ! ssh_output="$(sudo -u "$username" ssh macvm.shared true 2>&1)"; do
+		sleep 5
+		tries=$((tries - 1))
+		if [ 0 -ge "$tries" ]; then
+			echo "$ssh_output" >&2
+			echo "Error: unable to connect to new virtual machine" >&2
+			exit 1
+		fi
+	done
+	echo "Log in to complete setup of new virtual machine"
+	sudo -u "$username" ssh -qt macvm.shared sudo \
+		"echo 'ALL ALL = (ALL) NOPASSWD: ALL' | sudo EDITOR='tee -a' visudo" \
+		|| {
+			echo "Error: Unable to configure new virtual machine" >&2
+			exit 1
+		}
+	for file in "$programdirectory"/*; do
+		if [ -f "$file" ]; then
+			if ! scp_output="$(sudo -u "$username" scp "$file" macvm.shared: 2>&1)"; then
+				echo "$scp_output" >&2
+				echo "Error: Unable to transfer files to new virtual machine" >&2
+				exit 1
+			fi
+		fi
+	done
+	addXcodeCommandLineTools || exit 1
+	addParallelsDesktop || exit 1
+	echo "Running mkmacvm on new virtual machine"
+	sudo -u "$username" ssh macvm.shared "sudo VERBOSE=y ./mkmacvm" || exit 1
+}
+addParallelsDesktop() {
+	echo "Downloading Parallels Desktop to new virtual machine"
+	if ! ssh_output="$(sudo -u "$username" ssh -q macvm.shared "curl -sSLO '$parallelsurl'" 2>&1)"; then
+		echo "$ssh_output" >&2
+		echo "Error: Unable to download Parallels Desktop" >&2
+		return 1
+	fi
+	echo "Installing Parallels Desktop on new virtual machine"
+	sudo -u "$username" ssh -qt macvm.shared "cat > installParallelsDesktop.sh" <<-EOF
+		hdiutil attach "$parallelsfile" \
+		&& sudo cp -a '/Volumes/Parallels Desktop 18/Parallels Desktop.app' /Applications \
+		&& sudo chflags nohidden '/Applications/Parallels Desktop.app' \
+		&& sudo xattr -d com.apple.FinderInfo '/Applications/Parallels Desktop.app' \
+		&& sudo '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init
+	EOF
+	if ! ssh_output="$(sudo -u "$username" ssh macvm.shared "sudo sh ./installParallelsDesktop.sh")"; then
+		echo "$ssh_output" >&2
+		echo "Error: unable to install Parallels Desktop" >&2
+		return 1
+	fi
+}
+addXcodeCommandLineTools() {
+	echo "Installing Command Line Tools for Xcode on new virtual machine"
+	if ! ssh_output="$(
+		sudo -u "$username" ssh macvm.shared \
+			"touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress" \
+			2>&1
+	)"; then
+		echo "$ssh_output" >&2
+		return 1
+	fi
+	if ! commandlinetools="$(
+		sudo -u "$username" ssh -q macvm.shared 'softwareupdate -l 2>/dev/null' \
+			| sed -n \
+				-e '/Command Line Tools/!d' \
+				-e '/[Bb][Ee][Tt][Aa]/d' \
+				-e '/^[ \*]*Label: */{s///;p;}' \
+			| sort -V \
+			| tail -n1
+	)" || [ -z "$commandlinetools" ]; then
+		echo "Error: Unable to find Command Line Tools for Xcode" >&2
+		return 1
+	fi
+	if ! sudo -u "$username" ssh -q macvm.shared "sudo softwareupdate -i '$commandlinetools'"; then
+		echo "Error: Unable to download Command Line Tools for Xcode" >&2
+		return 1
+	fi
+}
+atTerminal() {
+	# true (return 0) if stdin is tty and thus able to input a password
+	if [ -t 0 ]; then return 0; fi
+	return 1
+}
+installParallels() {
+	echo "Downloading Parallels Desktop"
+	if ! curl -LO "$parallelsurl"; then
+		echo "Error: Unable to download Parallels Desktop" >&2
+		return 1
+	fi
+	echo "Installing Parallels Desktop"
+	if ! hdiutil attach "$parallelsfile" \
+		|| ! cp -a "/Volumes/Parallels Desktop 18/Parallels Desktop.app" /Applications \
+		|| ! chflags nohidden '/Applications/Parallels Desktop.app' \
+		|| ! xattr -d com.apple.FinderInfo '/Applications/Parallels Desktop.app' \
+		|| ! '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init; then
+		echo "Error: Unable to install Parallels Desktop" >&2
+		return 1
+	fi
+}
+main "$@"
