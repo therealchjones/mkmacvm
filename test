@@ -34,6 +34,9 @@ set -u
 parallelsurl="https://download.parallels.com/desktop/v18/18.0.0-53049/ParallelsDesktop-18.0.0-53049.dmg"
 parallelsfile="${parallelsurl##*/}"
 username="$SUDO_USER"
+vmhostname="macvm.shared"
+
+trap deactivateParallels EXIT
 
 main() {
 	programname="$(basename "$0")"
@@ -53,10 +56,21 @@ main() {
 		# newly-created virtual machine, since we can't make it use passwordless
 		# sudo without first using sudo on the new virtual machine
 		echo "Warning: not at terminal. Will not perform nested test." >&2
+	else
+		if [ ! -r "$programdirectory/parallels-key" ]; then
+			echo "Error: '$programdirectory/parallels-key' does not exist." >&2
+			echo "       Cannot install Parallels in nested virtual machine." >&2
+			exit 1
+		fi
 	fi
-	echo "Checking for Parallels command line tool"
+	echo "Checking for Python 3"
+	if ! python3 --version; then
+		echo "Error: Python 3 is required for mkmacvm" >&2
+		exit 1
+	fi
+	echo "Checking for Parallels command line tools"
 	if ! prlctl --version; then
-		echo "Parallels Desktop not found."
+		echo "Parallels Desktop not found"
 		if [ "true" = "$CI" ]; then
 			echo "In CI environment. Attempting to install Parallels Desktop"
 			if ! installParallels; then
@@ -80,7 +94,7 @@ main() {
 	fi
 	echo "Configuring new virtual machine"
 	tries=30
-	while ! ssh_output="$(sudo -u "$username" ssh macvm.shared true 2>&1)"; do
+	while ! ssh_output="$(sudo -u "$username" ssh "$vmhostname" true 2>&1)"; do
 		sleep 5
 		tries=$((tries - 1))
 		if [ 0 -ge "$tries" ]; then
@@ -90,7 +104,7 @@ main() {
 		fi
 	done
 	echo "Log in to complete setup of new virtual machine"
-	sudo -u "$username" ssh -qt macvm.shared sudo \
+	sudo -u "$username" ssh -qt "$vmhostname" sudo \
 		"echo 'ALL ALL = (ALL) NOPASSWD: ALL' | sudo EDITOR='tee -a' visudo" \
 		|| {
 			echo "Error: Unable to configure new virtual machine" >&2
@@ -98,7 +112,7 @@ main() {
 		}
 	for file in "$programdirectory"/*; do
 		if [ -f "$file" ]; then
-			if ! scp_output="$(sudo -u "$username" scp "$file" macvm.shared: 2>&1)"; then
+			if ! scp_output="$(sudo -u "$username" scp "$file" "$vmhostname": 2>&1)"; then
 				echo "$scp_output" >&2
 				echo "Error: Unable to transfer files to new virtual machine" >&2
 				exit 1
@@ -108,33 +122,35 @@ main() {
 	addXcodeCommandLineTools || exit 1
 	addParallelsDesktop || exit 1
 	echo "Running mkmacvm on new virtual machine"
-	sudo -u "$username" ssh macvm.shared "sudo VERBOSE=y ./mkmacvm" || exit 1
+	sudo -u "$username" ssh "$vmhostname" "sudo VERBOSE=y ./mkmacvm" || exit 1
 }
 addParallelsDesktop() {
 	echo "Downloading Parallels Desktop to new virtual machine"
-	if ! ssh_output="$(sudo -u "$username" ssh -q macvm.shared "curl -sSLO '$parallelsurl'" 2>&1)"; then
+	if ! ssh_output="$(sudo -u "$username" ssh -q "$vmhostname" "curl -sSLO '$parallelsurl'" 2>&1)"; then
 		echo "$ssh_output" >&2
 		echo "Error: Unable to download Parallels Desktop" >&2
 		return 1
 	fi
 	echo "Installing Parallels Desktop on new virtual machine"
-	sudo -u "$username" ssh -qt macvm.shared "cat > installParallelsDesktop.sh" <<-EOF
+	sudo -u "$username" ssh -qt "$vmhostname" "cat > installParallelsDesktop.sh" <<-EOF
 		hdiutil attach "$parallelsfile" \
 		&& sudo cp -a '/Volumes/Parallels Desktop 18/Parallels Desktop.app' /Applications \
 		&& sudo chflags nohidden '/Applications/Parallels Desktop.app' \
 		&& sudo xattr -d com.apple.FinderInfo '/Applications/Parallels Desktop.app' \
 		&& sudo '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init
 	EOF
-	if ! ssh_output="$(sudo -u "$username" ssh macvm.shared "sudo sh ./installParallelsDesktop.sh")"; then
+	if ! ssh_output="$(sudo -u "$username" ssh "$vmhostname" "sudo sh ./installParallelsDesktop.sh")"; then
 		echo "$ssh_output" >&2
 		echo "Error: unable to install Parallels Desktop" >&2
 		return 1
 	fi
+	echo "Activating Parallels Desktop on new virtual machine"
+	sudo -u "$username" ssh -q "$vmhostname" 'prlsrvctl install-license -k "$(cat parallels-key)"'
 }
 addXcodeCommandLineTools() {
 	echo "Installing Command Line Tools for Xcode on new virtual machine"
 	if ! ssh_output="$(
-		sudo -u "$username" ssh macvm.shared \
+		sudo -u "$username" ssh "$vmhostname" \
 			"touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress" \
 			2>&1
 	)"; then
@@ -142,7 +158,7 @@ addXcodeCommandLineTools() {
 		return 1
 	fi
 	if ! commandlinetools="$(
-		sudo -u "$username" ssh -q macvm.shared 'softwareupdate -l 2>/dev/null' \
+		sudo -u "$username" ssh -q "$vmhostname" 'softwareupdate -l 2>/dev/null' \
 			| sed -n \
 				-e '/Command Line Tools/!d' \
 				-e '/[Bb][Ee][Tt][Aa]/d' \
@@ -153,7 +169,7 @@ addXcodeCommandLineTools() {
 		echo "Error: Unable to find Command Line Tools for Xcode" >&2
 		return 1
 	fi
-	if ! sudo -u "$username" ssh -q macvm.shared "sudo softwareupdate -i '$commandlinetools'"; then
+	if ! sudo -u "$username" ssh -q "$vmhostname" "sudo softwareupdate -i '$commandlinetools'"; then
 		echo "Error: Unable to download Command Line Tools for Xcode" >&2
 		return 1
 	fi
@@ -162,6 +178,21 @@ atTerminal() {
 	# true (return 0) if stdin is tty and thus able to input a password
 	if [ -t 0 ]; then return 0; fi
 	return 1
+}
+deactivateParallels() {
+	if [ "true" = "$CI" ]; then
+		# we should deactivate Parallels on this machine
+		if type prlsrvctl >/dev/null; then
+			echo "Deactivating Parallels Desktop on this machine"
+			sudo -u "$username" prlsrvctl deactivate-license
+		fi
+	else
+		# we should deactivate Parallels on the first virtual machine
+		if sudo -u "$username" ssh -q "$vmhostname" 'type prlsrvctl >/dev/null'; then
+			echo "Deactivating Parallels Desktop on the virtual machine"
+			sudo -u "$username" ssh -q "$vmhostname" 'prlsrvctl deactivate-license'
+		fi
+	fi
 }
 installParallels() {
 	echo "Downloading Parallels Desktop"
@@ -176,6 +207,14 @@ installParallels() {
 		|| ! xattr -d com.apple.FinderInfo '/Applications/Parallels Desktop.app' \
 		|| ! '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init; then
 		echo "Error: Unable to install Parallels Desktop" >&2
+		return 1
+	fi
+	echo "Activating Parallels Desktop"
+	if [ -z "${PARALLELS_KEY:=}" ]; then
+		echo "Error: 'PARALLELS_KEY' environment variable not set. Cannot activate." >&2
+	fi
+	if ! prlsrvctl install-license -k "$PARALLELS_KEY"; then
+		echo "Error: Unable to activate Parallels" >&2
 		return 1
 	fi
 }
