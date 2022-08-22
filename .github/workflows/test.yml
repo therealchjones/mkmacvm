@@ -8,5 +8,5 @@ jobs:
       - uses: actions/checkout@v3.0.2
       - name: Test mkmacvm
         run: sudo "$GITHUB_WORKSPACE/test"
-		env:
-		  PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+        env:
+          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}

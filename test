@@ -27,6 +27,17 @@
 # If a nested virtual machine is created, additional changes to the first
 # virtual machine will be made, and no attempts will be made to clean up
 # artifacts on that first virtual machine.
+#
+# Parallels Desktop licensing:
+#
+# A Parallels Desktop for Business license is associated with this test script.
+# When running in a GitHub CI environment, the secret "PARALLELS_KEY" from the
+# environment is used to activate Parallels Desktop on the machine where this
+# script is running. When running on a local system, the script looks for a key
+# in the file "parallels-key" in the same directory as the script, and this key
+# is used to activate Parallels Desktop on the first virtual machine. In either
+# case, the script attempts to deactivate Parallels Desktop when exiting; if
+# this fails, the installation can be deactivated from the Parallels web site.
 
 set -e
 set -u
@@ -35,7 +46,7 @@ parallelsurl="https://download.parallels.com/desktop/v18/18.0.0-53049/ParallelsD
 parallelsfile="${parallelsurl##*/}"
 username="$SUDO_USER"
 vmhostname="macvm.shared"
-
+CI="${CI:-}"
 trap deactivateParallels EXIT
 
 main() {
@@ -82,6 +93,7 @@ main() {
 			exit 1
 		fi
 	fi
+	echo "Running mkmacvm"
 	VERBOSE=y "$programdirectory"/mkmacvm || exit 1
 	if ! atTerminal; then
 		echo "Warning: skipping nested test" >&2
@@ -139,13 +151,13 @@ addParallelsDesktop() {
 		&& sudo xattr -d com.apple.FinderInfo '/Applications/Parallels Desktop.app' \
 		&& sudo '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init
 	EOF
-	if ! ssh_output="$(sudo -u "$username" ssh "$vmhostname" "sudo sh ./installParallelsDesktop.sh")"; then
+	if ! ssh_output="$(sudo -u "$username" ssh "$vmhostname" "sudo sh ./installParallelsDesktop.sh" 2>&1)"; then
 		echo "$ssh_output" >&2
 		echo "Error: unable to install Parallels Desktop" >&2
 		return 1
 	fi
 	echo "Activating Parallels Desktop on new virtual machine"
-	sudo -u "$username" ssh -q "$vmhostname" 'prlsrvctl install-license -k "$(cat parallels-key)"'
+	sudo -u "$username" ssh -q "$vmhostname" '/usr/local/bin/prlsrvctl install-license -k "$(cat parallels-key)"'
 }
 addXcodeCommandLineTools() {
 	echo "Installing Command Line Tools for Xcode on new virtual machine"
@@ -215,6 +227,8 @@ installParallels() {
 	fi
 	if ! prlsrvctl install-license -k "$PARALLELS_KEY"; then
 		echo "Error: Unable to activate Parallels" >&2
+		echo "       If necessary, revoke current activation keys at" >&2
+		echo "       https://my.parallels.com" >&2
 		return 1
 	fi
 }
