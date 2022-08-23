@@ -50,11 +50,24 @@ USERREALNAME="$(id -F "$USERNAME")"
 USERREALNAME="${USERREALNAME:-"$USERNAME"}"
 
 # Check for required programs
-if ! type prlctl >"$DEBUGOUT"; then
+getexec() {
+	if [ 1 != "$#" ]; then
+		echo "getexec accepts exactly 1 parameter" >&2
+		return 1
+	fi
+	if sudo -u "$SUDO_USER" type "$1" >/dev/null; then
+		echo "$1"
+	elif [ -e "/usr/local/bin/$1" ]; then
+		echo "/usr/local/bin/$1"
+	else
+		return 1
+	fi
+}
+if ! PRLCTL="$(getexec prlctl)" || [ -z "$PRLCTL" ]; then
 	echo "'prlctl' was not found; $PROGRAMNAME requires Parallels Desktop Pro." >&2
 	exit 1
 fi
-if ! python3 --version >"$DEBUGOUT" 2>&1; then
+if ! "${PYTHON3:=$(getexec python3)}" --version >"$DEBUGOUT" 2>&1; then
 	echo "Python 3 is not installed; $PROGRAMNAME requires Python 3." >&2
 	exit 1
 fi
@@ -63,7 +76,7 @@ fi
 # can be monitored or shut down later without messing with the system as
 # currently running.
 # prlctl must be run as the end user, not sudo/root
-if sudo -u "$SUDO_USER" prlctl list "$VM_NAME" >/dev/null 2>&1; then
+if sudo -u "$SUDO_USER" "$PRLCTL" list "$VM_NAME" >/dev/null 2>&1; then
 	echo "A virtual machine named '$VM_NAME' already exists. That" >&2
 	echo "makes things confusing. Remove or rename that virtual machine," >&2
 	echo "then try $PROGRAMNAME again." >&2
@@ -223,7 +236,7 @@ getInstallerSharedSupport() {
 VM_ERROR=""
 VM_DONE=""
 vmIsRunning() {
-	if ! { VM_STATUS="$(sudo -u "$USERNAME" prlctl status "$VM_NAME")"; } 2>"$DEBUGOUT"; then
+	if ! { VM_STATUS="$(sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME")"; } 2>"$DEBUGOUT"; then
 		return 2
 	fi
 	if [ -z "${VM_STATUS##VM "$VM_NAME" exist *}" ]; then # this is in the right format
@@ -300,16 +313,16 @@ cleanup() {
 		if vmIsRunning; then
 			if [ "0" = "$RETURNSTATUS" ]; then
 				echo "Shutting down virtual machine..." >"$VERBOSEOUT"
-				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME"; } >"$DEBUGOUT"
+				{ sudo -u "$USERNAME" "$PRLCTL" stop "$VM_NAME"; } >"$DEBUGOUT"
 			else
 				echo "Forcefully shutting down virtual machine..." >"$VERBOSEOUT"
-				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME" --kill; } >"$DEBUGOUT"
+				{ sudo -u "$USERNAME" "$PRLCTL" stop "$VM_NAME" --kill; } >"$DEBUGOUT"
 			fi
 			waitForVmShutdown
 		fi
-		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >$DEBUGOUT 2>&1; then
+		if { sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME"; } >$DEBUGOUT 2>&1; then
 			echo "Removing installation disk image from virtual machine..." >"$VERBOSEOUT"
-			if ! { sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"; then
+			if ! { sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"; then
 				echo "Unable to remove installation disk image from virtual machine." >&2
 				RETURNSTATUS=1
 			fi
@@ -348,7 +361,7 @@ cleanup() {
 	if [ "0" != "$RETURNSTATUS" ] && [ -n "$DEBUG" ]; then
 		if vmIsRunning; then
 			echo "New potentially corrupt VM left running: $VM_NAME" >"$DEBUGOUT"
-		elif { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
+		elif { sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
 			echo "New potentially corrupt VM left in place: $VM_NAME" >"$DEBUGOUT"
 		fi
 		LEFT=""
@@ -380,9 +393,9 @@ cleanup() {
 		fi
 	fi
 	if [ "0" != "$RETURNSTATUS" ] && [ -z "$DEBUG" ]; then
-		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
+		if { sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
 			echo "Removing potentially corrupted VM..." >"$VERBOSEOUT"
-			{ sudo -u "$USERNAME" prlctl delete "$VM_NAME"; } >"$DEBUGOUT"
+			{ sudo -u "$USERNAME" "$PRLCTL" delete "$VM_NAME"; } >"$DEBUGOUT"
 		fi
 	fi
 	echo "Done." >"$VERBOSEOUT"
@@ -552,9 +565,9 @@ chown "$USERNAME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg"
 echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 # The VM can only be seen and modified by the creating
 # user, so all prlctl commands must be done via "reverse sudo"
-{ sudo -u "$USERNAME" prlctl create "$VM_NAME" -o macos; } >"$DEBUGOUT"
+{ sudo -u "$USERNAME" "$PRLCTL" create "$VM_NAME" -o macos; } >"$DEBUGOUT"
 {
-	sudo -u "$USERNAME" prlctl set "$VM_NAME" --cpus auto --memsize auto \
+	sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" --cpus auto --memsize auto \
 		--auto-share-camera off \
 		--nested-virt on \
 		--smart-mount off --shared-cloud off \
@@ -563,22 +576,22 @@ echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 		--startup-view headless \
 		--adaptive-hypervisor on
 } >"$DEBUGOUT"
-VM_HOME="$(sudo -u "$USERNAME" prlctl list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
+VM_HOME="$(sudo -u "$USERNAME" "$PRLCTL" list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
 mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
 {
-	sudo -u "$USERNAME" prlctl set "$VM_NAME" \
+	sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" \
 		--device-set "cdrom0" \
 		--image "$VM_HOME/$INSTALLER_IMAGENAME".dmg \
 		--connect
 } >"$DEBUGOUT"
 
 echo "Starting virtual machine..." >"$VERBOSEOUT"
-{ sudo -u "$USERNAME" prlctl start "$VM_NAME"; } >"$DEBUGOUT"
+{ sudo -u "$USERNAME" "$PRLCTL" start "$VM_NAME"; } >"$DEBUGOUT"
 
 echo 'Waiting for new virtual machine to start...' >"$VERBOSEOUT"
 getIpAddress() {
 	if ! ipaddress="$(
-		{ sudo -u "$USERNAME" prlctl list -f "$VM_NAME"; } \
+		{ sudo -u "$USERNAME" "$PRLCTL" list -f "$VM_NAME"; } \
 			| sed -E -n "/$VM_NAME"'$/{s/^.+[[:space:]]+([-.0-9]+)[[:space:]]+.+$/\1/;p;}'
 	)" || [ "-" = "$ipaddress" ]; then
 		return 1
@@ -598,7 +611,7 @@ if ! sudo -u "$USERNAME" \
 	SDK_LIBRARY="$PRLSDKLIB" \
 	VM_NAME="$VM_NAME" \
 	INSTALL_COMMAND='"/Volumes/Image Volume/install"' \
-	python3 "$(dirname "$0")"/startinstall.py; then
+	"$PYTHON3" "$(dirname "$0")"/startinstall.py; then
 	echo 'Unable to start macOS installation.' >&2
 	exit 1
 fi
@@ -637,7 +650,7 @@ echo "Shutting down the virtual machine..." >"$VERBOSEOUT"
 while vmIsRunning; do
 	sleep 5
 done
-{ sudo -u "$USERNAME" prlctl set "$VM_NAME" --startup-view window; } >"$DEBUGOUT"
+{ sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" --startup-view window; } >"$DEBUGOUT"
 
 echo "" >"$VERBOSEOUT"
 echo "********************************************" >"$VERBOSEOUT"
