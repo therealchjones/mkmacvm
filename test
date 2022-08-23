@@ -41,6 +41,7 @@
 
 set -e
 set -u
+set -x
 
 parallelsurl="https://download.parallels.com/desktop/v18/18.0.0-53049/ParallelsDesktop-18.0.0-53049.dmg"
 parallelsfile="${parallelsurl##*/}"
