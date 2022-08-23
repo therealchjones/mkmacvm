@@ -6,6 +6,8 @@ jobs:
     runs-on: macos-12
     steps:
       - uses: actions/checkout@v3.0.2
+      - name: Check environment
+        run: env
       - name: Test mkmacvm
         run: sudo "$GITHUB_WORKSPACE/test"
         env:
