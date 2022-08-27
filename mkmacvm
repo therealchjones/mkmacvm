@@ -431,7 +431,7 @@ else
 		killall InstallAssistant
 		PREEXISTINGINSTALLER=y
 	fi
-	if ! "$(getCreateInstall)" >/dev/null; then
+	if ! getCreateInstall >"$DEBUGOUT"; then
 		echo "Unable to find createinstallmedia. Exiting." >&2
 		exit 1
 	fi
