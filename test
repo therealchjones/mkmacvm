@@ -90,6 +90,8 @@ installParallels() {
 	fi
 	sudo -u "$username" brew update || return 1
 	sudo -u "$username" brew install parallels || return 1
+	launchctl stop com.parallels.desktop.launchdaemon
+	launchctl start com.parallels.desktop.launchdaemon
 	echo "Activating Parallels Desktop"
 	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
 		echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
@@ -100,6 +102,8 @@ installParallels() {
 		echo "Error: Unable to activate Parallels Desktop" >&2
 		echo "       If necessary, revoke current activation keys at" >&2
 		echo "       https://my.parallels.com" >&2
+		echo "System log:"
+		cat /private/var/log/system.log
 		return 1
 	fi
 }
