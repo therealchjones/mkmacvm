@@ -9,6 +9,6 @@ jobs:
       - name: Check environment
         run: env
       - name: Test mkmacvm
-        run: sudo "$GITHUB_WORKSPACE/test"
+        run: "$GITHUB_WORKSPACE/test"
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}

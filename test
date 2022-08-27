@@ -19,10 +19,10 @@
 # may leave that virtual machine in the "running" state, but attempts to make no
 # other changes to the system where it's run in most cases.
 #
-# If this script is run in an environment where the environment variable "CI" is
-# set to "true" and requirements for mkmacvm (specifically, Python 3 and
-# Parallels Desktop) are not available, they will be installed, but no attempts
-# to clean up their artifacts will be made afterward.
+# If this script is run in an environment where the environment variables "CI"
+# and "GITHUB_ACTIONS" are set to "true" and requirements for mkmacvm
+# (specifically, Python 3 and Parallels Desktop) are not available, they will be
+# installed, but no attempts to clean up their artifacts will be made afterward.
 #
 # If a nested virtual machine is created, additional changes to the first
 # virtual machine will be made, and no attempts will be made to clean up
@@ -30,36 +30,39 @@
 #
 # Parallels Desktop licensing:
 #
-# A Parallels Desktop for Business license is associated with this test script.
-# When running in a GitHub CI environment, the secret "PARALLELS_KEY" from the
-# environment is used to activate Parallels Desktop on the machine where this
-# script is running. When running on a local system, the script looks for a key
-# in the file "parallels-key" in the same directory as the script, and this key
-# is used to activate Parallels Desktop on the first virtual machine. In either
-# case, the script attempts to deactivate Parallels Desktop when exiting; if
-# this fails, the installation can be deactivated from the Parallels web site.
+# A Parallels Desktop for Business license is associated with development of
+# mkmacvm for use with this test script. When running in a GitHub CI
+# environment, the secret "PARALLELS_KEY" from the environment is used to
+# activate Parallels Desktop on the machine where this script is running. When
+# running on a local system, the script looks for a key in the file
+# "parallels-key" in the same directory as the script, and this key is used to
+# activate Parallels Desktop on the first virtual machine. In either case, the
+# script attempts to deactivate Parallels Desktop when exiting; if this fails,
+# the installation can be deactivated from the Parallels web site.
 
 set -e
 set -u
-set -x
 
 parallelsurl="https://download.parallels.com/desktop/v18/18.0.0-53049/ParallelsDesktop-18.0.0-53049.dmg"
-parallelsfile="${parallelsurl##*/}"
-username="$SUDO_USER"
 vmname="macvm"
-vmhostname="${vmname}.shared"
-CI="${CI:-}"                         # set to "true" by GitHub Actions
-GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" # set to "true" by GitHub Actions
 
 main() {
 	programname="$(basename "$0")"
 	programdirectory="$(dirname "$0")"
-	MKMACVM="$programdirectory/mkmacvm"
-	if [ "0" != "$(id -u)" ] || [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
-		echo "Error: '$programname' should be run as a regular user with 'sudo'." >&2
-		echo "       Try 'sudo \"$0\"'." >&2
-		exit 1
+	CI="${CI:-}"                         # set to "true" by GitHub Actions
+	GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" # set to "true" by GitHub Actions
+	if [ "0" != "$(id -u)" ]; then
+		if [ "true" = "$CI" ] && [ "true" = "$GITHUB_ACTIONS" ]; then
+			echo "Executing with root privileges on GitHub runner"
+		else
+			echo "'$programname' requires root privileges. Please authenticate."
+		fi
+		exec sudo -E "$0" "$@"
+	elif [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
+		echo "Error: 'programname' should be run as a regular user." >&2
 	fi
+	username="$SUDO_USER"
+	MKMACVM="$programdirectory/mkmacvm"
 	if [ ! -e "$MKMACVM" ]; then
 		echo "Error: Unable to locate mkmacvm. It must be in the same" >&2
 		echo "       directory as $programname, $programdirectory" >&2
@@ -126,6 +129,7 @@ main() {
 	sudo -u "$username" "$PRLCTL" start "$vmname" >/dev/null || exit 1
 	echo "Configuring new virtual machine"
 	tries=30
+	vmhostname="${vmname}.shared"
 	while ! ssh_output="$(sudo -u "$username" ssh "$vmhostname" true 2>&1)"; do
 		sleep 5
 		tries=$((tries - 1))
@@ -168,7 +172,7 @@ getexec() {
 		echo "getexec accepts exactly 1 parameter" >&2
 		return 1
 	fi
-	if sudo -u "$username" type "$1" >/dev/null; then
+	if sudo -u "$username" type "$1" >/dev/null 2>&1; then
 		echo "$1"
 	elif [ -e "/usr/local/bin/$1" ]; then
 		echo "/usr/local/bin/$1"
@@ -177,7 +181,7 @@ getexec() {
 	fi
 }
 installParallels() {
-	if brew --version >/dev/null; then
+	if brew --version >/dev/null 2>&1; then
 		# will use homebrew to install Parallels
 		if [ -z "${PARALLELS_KEY:=}" ]; then
 			echo "Error: 'PARALLELS_KEY' is not set; cannot activate Parallels Desktop" >&2
@@ -194,16 +198,17 @@ installParallels() {
 		fi
 		PARALLELS_KEY="${PARALLELS_KEY:-$(head -n1 "$programdirectory/parallels-key")}"
 		echo "Downloading Parallels Desktop"
-		if ! curl -LO "$parallelsurl"; then
+		if ! curl -sSLO "$parallelsurl"; then
 			echo "Error: Unable to download Parallels Desktop" >&2
 			return 1
 		fi
 		echo "Installing Parallels Desktop"
-		if ! hdiutil attach "$parallelsfile" \
+		parallelsfile="${parallelsurl##*/}"
+		if ! hdiutil attach "$parallelsfile" >/dev/null \
 			|| ! cp -a "/Volumes/Parallels Desktop 18/Parallels Desktop.app" /Applications \
 			|| ! chflags nohidden '/Applications/Parallels Desktop.app' \
 			|| ! xattr -d com.apple.FinderInfo '/Applications/Parallels Desktop.app' \
-			|| ! '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init; then
+			|| ! '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init >/dev/null; then
 			echo "Error: Unable to install Parallels Desktop" >&2
 			return 1
 		fi
