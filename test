@@ -88,8 +88,8 @@ installParallels() {
 		echo "Error: 'PARALLELS_KEY' is not set; cannot activate Parallels Desktop" >&2
 		return 1
 	fi
-	brew update
-	brew install parallels
+	sudo -u "$username" brew update || return 1
+	sudo -u "$username" brew install parallels || return 1
 	echo "Activating Parallels Desktop"
 	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
 		echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
