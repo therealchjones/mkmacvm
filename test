@@ -1,15 +1,6 @@
 #!/bin/sh
 
-# Run mkmacvm on the current "host" machine to create a new virtual machine,
-# then run mkmacvm on that new virtual machine to create a "nested" virtual
-# machine. This ensures proper functionality and minimum requirements beyond the
-# default installation.
-#
-# Requires running this script from a terminal (for example, on the local
-# machine or via ssh -t) to build the nested virtual machine, as mkmacvm does
-# not use passwordless sudo by default. If not at a terminal, mkmacvm will be
-# tested but the second step, which installs requirements and creates the nested
-# virtual machine, will be skipped.
+# Run mkmacvm to create a new virtual machine
 #
 # System effects of this script:
 #
@@ -20,33 +11,20 @@
 # other changes to the system where it's run in most cases.
 #
 # If this script is run in an environment where the environment variables "CI"
-# and "GITHUB_ACTIONS" are set to "true" and requirements for mkmacvm
-# (specifically, Python 3 and Parallels Desktop) are not available, they will be
-# installed, but no attempts to clean up their artifacts will be made afterward.
-#
-# If a nested virtual machine is created, additional changes to the first
-# virtual machine will be made, and no attempts will be made to clean up
-# artifacts on that first virtual machine.
-#
-# Parallels Desktop licensing:
-#
-# A Parallels Desktop for Business license is associated with development of
-# mkmacvm for use with this test script. When running in a GitHub CI
-# environment, the secret "PARALLELS_KEY" from the environment is used to
-# activate Parallels Desktop on the machine where this script is running. When
-# running on a local system, the script looks for a key in the file
-# "parallels-key" in the same directory as the script, and this key is used to
-# activate Parallels Desktop on the first virtual machine. In either case, the
+# and "GITHUB_ACTIONS" are set to "true", the script will try to determine if
+# Parallels Desktop Pro
+# or Parallels Desktop for Business are available. If not, the script will
+# attempt to install and activate
+# Parallels Desktop for Business. The script uses the value of the
+# secret "PARALLELS_KEY" from the GitHub Actions environment for activation. If used, the
 # script attempts to deactivate Parallels Desktop when exiting; if this fails,
 # the installation can be deactivated from the Parallels web site.
 
 set -e
 set -u
 
-parallelsurl="https://download.parallels.com/desktop/v18/18.0.0-53049/ParallelsDesktop-18.0.0-53049.dmg"
-vmname="macvm"
-
 main() {
+	export PATH="$PATH:/usr/local/bin"
 	programname="$(basename "$0")"
 	programdirectory="$(dirname "$0")"
 	CI="${CI:-}"                         # set to "true" by GitHub Actions
@@ -68,38 +46,16 @@ main() {
 		echo "       directory as $programname, $programdirectory" >&2
 		exit 1
 	fi
-	if [ "true" = "${MKMACVMNESTED:=}" ]; then
-		# running in nested VM
-		# must install parallels and python
-		# but let's do some sanity checking, as I really don't want to
-		# inadvertently screw up a local system
-		if python3 --version >/dev/null 2>&1 \
-			|| [ -e "${PRLCTL:-$(getexec prlctl)}" ]; then
-			echo "Error: 'MKMACVMNESTED' is set but this does not appear to be a" >&2
-			echo "       new bare virtual machine. Will not continue." >&2
-			exit 1
-		fi
-		echo "Testing mkmacvm on bare nested VM"
-		installParallels || exit 1
-		installPython || exit 1
-		VERBOSE=y "$MKMACVM" || exit 1
-		exit 0
-	elif [ "true" = "$CI" ] && [ "true" = "$GITHUB_ACTIONS" ]; then
+	if [ "true" = "$CI" ] && [ "true" = "$GITHUB_ACTIONS" ]; then
 		# running on GitHub-hosted runner
-		# try to determine user and set password if possible; if not,
-		# disable nested creation
 		# can install parallels from brew and python's probably already
 		# installed
-		if ! python3 --version >/dev/null; then
-			echo "Error: Python is not available on this GitHub runner." >&2
-			exit 1
-		fi
+		echo "Testing mkmacvm on GitHub runner"
 		if ! brew --version >/dev/null; then
 			echo "Error: Homebrew is not installed on this GitHub runner." >&2
 			exit 1
 		fi
 		installParallels || exit 1
-		echo "Testing mkmacvm on GitHub runner"
 		VERBOSE=y "$MKMACVM" || exit 1
 	else
 		# running on local machine
@@ -108,60 +64,6 @@ main() {
 		echo "Testing mkmacvm on local system"
 		VERBOSE=y "$MKMACVM" || exit 1
 	fi
-	# If we were on a nested VM, we'd have already exited
-	# Decide if we're going to run a nested VM test
-	if atTerminal || [ -n "${USER_PASSWORD:-}" ]; then
-		echo "Setting up nested VM test"
-	else
-		# unable to input password, so we won't be able to run mkmacvm on the
-		# newly-created virtual machine, since we can't make it use passwordless
-		# sudo without first using sudo on the new virtual machine
-		echo "Warning: not at terminal. Will not perform nested test." >&2
-		exit 0
-	fi
-	if [ -z "${PRLCTL:=$(getexec prlctl)}" ]; then
-		echo "Error: Unable to find 'prlctl'. Parallels Desktop may not be installed." >&2
-		exit 1
-	fi
-	echo "Enabling nested virtualization for new virtual machine"
-	sudo -u "$username" "$PRLCTL" set "$vmname" --nested-virt on >/dev/null || exit 1
-	echo "Starting new virtual machine"
-	sudo -u "$username" "$PRLCTL" start "$vmname" >/dev/null || exit 1
-	echo "Configuring new virtual machine"
-	tries=30
-	vmhostname="${vmname}.shared"
-	while ! ssh_output="$(sudo -u "$username" ssh "$vmhostname" true 2>&1)"; do
-		sleep 5
-		tries=$((tries - 1))
-		if [ 0 -ge "$tries" ]; then
-			echo "$ssh_output" >&2
-			echo "Error: unable to connect to new virtual machine" >&2
-			exit 1
-		fi
-	done
-	echo "Log in to complete setup of new virtual machine"
-	sudo -u "$username" ssh -qt "$vmhostname" sudo \
-		"echo 'ALL ALL = (ALL) NOPASSWD: ALL' | sudo EDITOR='tee -a' visudo >/dev/null" \
-		|| {
-			echo "Error: Unable to configure new virtual machine" >&2
-			exit 1
-		}
-	for file in "$programdirectory"/*; do
-		if [ -f "$file" ]; then
-			if ! scp_output="$(sudo -u "$username" scp "$file" "$vmhostname": 2>&1)"; then
-				echo "$scp_output" >&2
-				echo "Error: Unable to transfer files to new virtual machine" >&2
-				exit 1
-			fi
-		fi
-	done
-	echo "Beginning nested test"
-	sudo -u "$username" ssh "$vmhostname" "sudo MKMACVMNESTED=true ./$programname" || exit 1
-}
-atTerminal() {
-	# true (return 0) if stdin is tty and thus able to input a password
-	if [ -t 0 ]; then return 0; fi
-	return 1
 }
 deactivateParallels() {
 	echo "Deactivating Parallels Desktop"
@@ -181,38 +83,13 @@ getexec() {
 	fi
 }
 installParallels() {
-	if brew --version >/dev/null 2>&1; then
-		# will use homebrew to install Parallels
-		if [ -z "${PARALLELS_KEY:=}" ]; then
-			echo "Error: 'PARALLELS_KEY' is not set; cannot activate Parallels Desktop" >&2
-			return 1
-		fi
-		echo "Installing Parallels Desktop with Homebrew"
-		brew update
-		brew install parallels
-	else
-		if [ ! -r "$programdirectory/parallels-key" ]; then
-			echo "Error: Cannot read '$programdirectory/parallels-key'." >&2
-			echo "       Unable to activate Parallels Desktop." >&2
-			return 1
-		fi
-		PARALLELS_KEY="${PARALLELS_KEY:-$(head -n1 "$programdirectory/parallels-key")}"
-		echo "Downloading Parallels Desktop"
-		if ! curl -sSLO "$parallelsurl"; then
-			echo "Error: Unable to download Parallels Desktop" >&2
-			return 1
-		fi
-		echo "Installing Parallels Desktop"
-		parallelsfile="${parallelsurl##*/}"
-		if ! hdiutil attach "$parallelsfile" >/dev/null \
-			|| ! cp -a "/Volumes/Parallels Desktop 18/Parallels Desktop.app" /Applications \
-			|| ! chflags nohidden '/Applications/Parallels Desktop.app' \
-			|| ! xattr -d com.apple.FinderInfo '/Applications/Parallels Desktop.app' \
-			|| ! '/Applications/Parallels Desktop.app/Contents/MacOS/inittool' init >/dev/null; then
-			echo "Error: Unable to install Parallels Desktop" >&2
-			return 1
-		fi
+	echo "Installing Parallels Desktop with Homebrew"
+	if [ -z "${PARALLELS_KEY:=}" ]; then
+		echo "Error: 'PARALLELS_KEY' is not set; cannot activate Parallels Desktop" >&2
+		return 1
 	fi
+	brew update
+	brew install parallels
 	echo "Activating Parallels Desktop"
 	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
 		echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
@@ -220,36 +97,10 @@ installParallels() {
 	fi
 	trap 'deactivateParallels' EXIT
 	if ! sudo -u "$username" "$PRLSRVCTL" install-license -k "$PARALLELS_KEY"; then
-		echo "Error: Unable to activate Parallels" >&2
+		echo "Error: Unable to activate Parallels Desktop" >&2
 		echo "       If necessary, revoke current activation keys at" >&2
 		echo "       https://my.parallels.com" >&2
 		return 1
 	fi
 }
-installPython() {
-	# currently installs Xcode Command Line tools; should change to just python3
-	echo "Installing Command Line Tools for Xcode on new virtual machine"
-	if ! touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress; then
-		echo "Error: Unable to configure softwareupdate to download" >&2
-		echo "       Command Line Tools for Xcode" >&2
-		return 1
-	fi
-	if ! commandlinetools="$(
-		softwareupdate -l 2>/dev/null \
-			| sed -n \
-				-e '/Command Line Tools/!d' \
-				-e '/[Bb][Ee][Tt][Aa]/d' \
-				-e '/^[ \*]*Label: */{s///;p;}' \
-			| sort -V \
-			| tail -n1
-	)" || [ -z "$commandlinetools" ]; then
-		echo "Error: Unable to find Command Line Tools for Xcode" >&2
-		return 1
-	fi
-	if ! softwareupdate -i "$commandlinetools"; then
-		echo "Error: Unable to download Command Line Tools for Xcode" >&2
-		return 1
-	fi
-}
-
 main "$@"
