@@ -91,14 +91,13 @@ installParallels() {
 	sudo -u "$username" brew update || return 1
 	sudo -u "$username" brew install parallels || return 1
 	launchctl stop com.parallels.desktop.launchdaemon
-	echo Enabling firewall logging:
-	/usr/libexec/ApplicationFirewall/socketfilterfw --setloggingmode on
-	/usr/libexec/ApplicationFirewall/socketfilterfw --getloggingopt
-	echo Allowed applications:
-	/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
-	/usr/libexec/ApplicationFirewall/socketfilterfw --getblockall
-	/usr/libexec/ApplicationFirewall/socketfilterfw --getallowsigned
-	/usr/libexec/ApplicationFirewall/socketfilterfw --listapps
+	echo Disabling firewall:
+	/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
+	/usr/libexec/ApplicationFirewall/socketfilterfw --add "/Applications/Parallels Desktop.app/Contents/MacOS/Parallels Service.app"
+	/usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "/Applications/Parallels Desktop.app/Contents/MacOS/Parallels Service.app"
+	/usr/libexec/ApplicationFirewall/socketfilterfw -k
+	launchctl unload /System/Library/LaunchAgents/com.apple.Finder.plist
+	killall UserNotificationCenter
 	launchctl start com.parallels.desktop.launchdaemon || launchctl error "$?"
 	echo "Activating Parallels Desktop"
 	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
@@ -110,8 +109,6 @@ installParallels() {
 		echo "Error: Unable to activate Parallels Desktop" >&2
 		echo "       If necessary, revoke current activation keys at" >&2
 		echo "       https://my.parallels.com" >&2
-		echo Available logs:
-		ls -l /var/log
 		return 1
 	fi
 }

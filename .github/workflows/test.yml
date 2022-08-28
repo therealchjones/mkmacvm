@@ -10,3 +10,6 @@ jobs:
         run: "$GITHUB_WORKSPACE/test"
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+      - uses: OrbitalOwen/desktop-screenshot-action@0.1
+        with:
+          file-name: "desktop.jpg"
