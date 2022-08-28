@@ -12,13 +12,12 @@
 #
 # If this script is run in an environment where the environment variables "CI"
 # and "GITHUB_ACTIONS" are set to "true", the script will try to determine if
-# Parallels Desktop Pro
-# or Parallels Desktop for Business are available. If not, the script will
-# attempt to install and activate
-# Parallels Desktop for Business. The script uses the value of the
-# secret "PARALLELS_KEY" from the GitHub Actions environment for activation. If used, the
-# script attempts to deactivate Parallels Desktop when exiting; if this fails,
-# the installation can be deactivated from the Parallels web site.
+# Parallels Desktop Pro or Parallels Desktop for Business are available. If not,
+# the script will attempt to install and activate Parallels Desktop for
+# Business. The script uses the value of the secret "PARALLELS_KEY" from the
+# GitHub Actions environment for activation. If used, the script attempts to
+# deactivate Parallels Desktop when exiting; if this fails, the installation can
+# be deactivated from the Parallels web site.
 
 set -e
 set -u
@@ -97,9 +96,10 @@ installParallels() {
 	fi
 	trap 'deactivateParallels' EXIT
 	if ! sudo -u "$username" "$PRLSRVCTL" install-license -k "$PARALLELS_KEY"; then
-		echo "Error: Unable to activate Parallels Desktop" >&2
-		echo "       If necessary, revoke current activation keys at" >&2
-		echo "       https://my.parallels.com" >&2
+		error="Error: Unable to activate Parallels Desktop"
+		error="${error}\n       If necessary, revoke current activation keys at"
+		error="${error}\n       https://my.parallels.com"
+		printf "%s\n" "$error" >&2
 		return 1
 	fi
 }
