@@ -102,8 +102,8 @@ installParallels() {
 		echo "Error: Unable to activate Parallels Desktop" >&2
 		echo "       If necessary, revoke current activation keys at" >&2
 		echo "       https://my.parallels.com" >&2
-		echo "System log:"
-		cat /private/var/log/system.log
+		echo "Firewall log:"
+		cat /private/var/log/appfirewall.log
 		return 1
 	fi
 }
