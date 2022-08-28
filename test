@@ -91,10 +91,15 @@ installParallels() {
 	sudo -u "$username" brew update || return 1
 	sudo -u "$username" brew install parallels || return 1
 	launchctl stop com.parallels.desktop.launchdaemon
-	/usr/libexec/ApplicationFirewall/socketfilterfw --getloggingmode
+	echo Enabling firewall logging:
 	/usr/libexec/ApplicationFirewall/socketfilterfw --setloggingmode on
+	/usr/libexec/ApplicationFirewall/socketfilterfw --getloggingopt
+	echo Allowed applications:
+	/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
+	/usr/libexec/ApplicationFirewall/socketfilterfw --getblockall
 	/usr/libexec/ApplicationFirewall/socketfilterfw --getallowsigned
-	launchctl start com.parallels.desktop.launchdaemon
+	/usr/libexec/ApplicationFirewall/socketfilterfw --listapps
+	launchctl start com.parallels.desktop.launchdaemon || launchctl error "$?"
 	echo "Activating Parallels Desktop"
 	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
 		echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
@@ -105,8 +110,8 @@ installParallels() {
 		echo "Error: Unable to activate Parallels Desktop" >&2
 		echo "       If necessary, revoke current activation keys at" >&2
 		echo "       https://my.parallels.com" >&2
-		echo "Firewall log:"
-		cat /private/var/log/appfirewall.log
+		echo Available logs:
+		ls -l /var/log
 		return 1
 	fi
 }
