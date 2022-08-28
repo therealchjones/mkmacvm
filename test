@@ -89,14 +89,7 @@ installParallels() {
 		return 1
 	fi
 	sudo -u "$username" brew update || return 1
-	sudo -u "$username" brew install parallels || return 1
-	launchctl stop com.parallels.desktop.launchdaemon
-	echo Disabling firewall
-	/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
-	/usr/libexec/ApplicationFirewall/socketfilterfw --add "/Applications/Parallels Desktop.app/Contents/MacOS/Parallels Service.app"
-	/usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "/Applications/Parallels Desktop.app/Contents/MacOS/Parallels Service.app"
-	/usr/libexec/ApplicationFirewall/socketfilterfw -k
-	launchctl start com.parallels.desktop.launchdaemon || launchctl error "$?"
+	sudo -u "$username" brew install parallels --no-quarantine || return 1
 	echo "Activating Parallels Desktop"
 	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
 		echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
