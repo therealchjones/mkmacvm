@@ -91,6 +91,9 @@ installParallels() {
 	sudo -u "$username" brew update || return 1
 	sudo -u "$username" brew install parallels || return 1
 	launchctl stop com.parallels.desktop.launchdaemon
+	socketfilterfw --getloggingmode
+	socketfilterfw --setloggingmode on
+	socketfilterfw --getallowsigned
 	launchctl start com.parallels.desktop.launchdaemon
 	echo "Activating Parallels Desktop"
 	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
