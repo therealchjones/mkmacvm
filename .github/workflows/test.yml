@@ -11,5 +11,6 @@ jobs:
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
       - uses: OrbitalOwen/desktop-screenshot-action@0.1
+        if: failure()
         with:
           file-name: "desktop.jpg"
