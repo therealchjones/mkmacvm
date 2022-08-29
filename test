@@ -94,7 +94,7 @@ installParallels() {
 	sudo -u "$username" brew install parallels --no-quarantine || return 1
 	csreq="fade0c00000000ac0000000100000006000000060000000600000006000000020000001d636f6d2e706172616c6c656c732e6465736b746f702e636f6e736f6c650000000000000f0000000e000000010000000a2a864886f763640602060000000000000000000e000000000000000a2a864886f7636406010d0000000000000000000b000000000000000a7375626a6563742e4f550000000000010000000a344336333634414358540000"
 	sqlite3 "/Users/$username/Library/Application Support/com.apple.TCC/TCC.db" \
-		"insert into access (
+		"insert or replace into access (
 			service,
 			client,
 			client_type,
@@ -105,6 +105,16 @@ installParallels() {
 			flags
 		) values (
 			'kTCCServiceCamera',
+			'com.parallels.desktop.console',
+			0,
+			2,
+			3,
+			1,
+			X'$csreq',
+			0
+		),
+		(
+			'kTCCServiceMicrophone',
 			'com.parallels.desktop.console',
 			0,
 			2,
