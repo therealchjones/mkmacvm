@@ -1,17 +1,27 @@
 name: test
 on:
   workflow_dispatch:
+  pull_request:
 jobs:
   run:
     runs-on: macos-12
     steps:
       - uses: actions/checkout@v3.0.2
-      - name: Test mkmacvm
+      - name: test mkmacvm
         run: "$GITHUB_WORKSPACE/test"
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+  debug:
+    if: failure()
+    needs: run
+    runs-on: macos-12
+    steps:
+      - uses: actions/checkout@v3.0.2
+      - name: test mkmacvm
+        run: "$GITHUB_WORKSPACE/test"
+        env:
+          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY}}
           DEBUG: y
       - uses: OrbitalOwen/desktop-screenshot-action@0.1
-        if: failure()
         with:
           file-name: "desktop.jpg"
