@@ -595,7 +595,7 @@ getIpAddress() {
 	fi
 }
 waitForNetwork() {
-	tries=30
+	tries=120
 	until VM_IPADDRESS="$(getIpAddress)"; do
 		tries="$((tries - 1))"
 		if [ 0 -ge "$tries" ]; then
