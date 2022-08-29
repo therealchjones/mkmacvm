@@ -7,8 +7,7 @@
 # mkmacvm itself creates and configures a new Parallels virtual machine on the
 # system where it's run, but attempts to make no other persistent changes on
 # that system and to clean up after itself even if it fails. This test script
-# may leave that virtual machine in the "running" state, but attempts to make no
-# other changes to the system where it's run in most cases.
+# attempts to make no other changes when run on a local system.
 #
 # If this script is run in an environment where the environment variables "CI"
 # and "GITHUB_ACTIONS" are set to "true", the script will try to determine if
@@ -65,9 +64,6 @@ main() {
 	fi
 }
 deactivateParallels() {
-	echo "TCC:"
-	sqlite3 /Users/"$username"/Library/Application\ Support/com.apple.TCC/TCC.db \
-		'select * from access'
 	echo "Deactivating Parallels Desktop"
 	sudo -u "$username" "$PRLSRVCTL" deactivate-license
 }

@@ -595,11 +595,19 @@ getIpAddress() {
 	fi
 }
 waitForNetwork() {
+	tries=30
 	until VM_IPADDRESS="$(getIpAddress)"; do
+		tries="$((tries - 1))"
+		if [ 0 -ge "$tries" ]; then
+			return 1
+		fi
 		sleep 5
 	done
 }
-waitForNetwork
+if ! waitForNetwork; then
+	echo "Error: Timed out; VM has not joined the network" >&2
+	exit 1
+fi
 echo 'Starting installation...' >"$VERBOSEOUT"
 if ! sudo -u "$USERNAME" \
 	PYTHONPATH="$PYTHONPATH" \
@@ -612,19 +620,24 @@ if ! sudo -u "$USERNAME" \
 fi
 echo 'Waiting for installation to complete...' >"$VERBOSEOUT"
 sshIsRunning() {
-	if [ -n "$VM_IPADDRESS" ]; then
-		waitForNetwork
-	fi
 	# returns error if not connectable, including
 	# if the hostname is not found
 	nc -z "$VM_IPADDRESS" 22 >"$DEBUGOUT" 2>&1
 }
-waitForSsh() {
-	tries=30
+getTime() {
+	date +%s
+}
+waitForInstallation() {
+	starttime="$(getTime)"
+	maxtime="$((4 * 60 * 60))" # 4 hours, in seconds
 	until sshIsRunning; do
-		tries="$((tries - 1))"
-		if [ "0" -ge "$tries" ]; then
-			echo "VM SSH port is not reachable" >&2
+		time="$(getTime)"
+		if [ -z "$starttime" ] || [ -z "$time" ]; then
+			echo "Error: Unable to get the installation time" >&2
+			return 1
+		fi
+		if [ "$((time - starttime))" -ge "$maxtime" ]; then
+			echo "Error: Timed out; VM never made SSH accessible" >&2
 			return 1
 		fi
 		sleep 5
@@ -651,7 +664,7 @@ waitForSshKey() {
 		return 1
 	fi
 }
-waitForSsh || exit 1 # which ensures the hostname is found and has port 22 open
+waitForInstallation || exit 1 # which actually ensures the hostname is found and has port 22 open
 echo "Setting up local ssh access..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT" 2>&1
 waitForSshKey || exit 1
