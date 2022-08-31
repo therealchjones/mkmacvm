@@ -12,6 +12,12 @@ jobs:
         run: "$GITHUB_WORKSPACE/test"
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+      - name: revoke key
+        if: cancelled()
+        run: |
+          if [ -e /usr/local/bin/prlsrvctl ]; then
+              /usr/local/bin/prlsrvctl deactivate-license
+          fi
   debug:
     if: failure()
     needs: run

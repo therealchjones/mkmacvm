@@ -361,6 +361,8 @@ cleanup() {
 	if [ "0" != "$RETURNSTATUS" ] && [ -n "$DEBUG" ]; then
 		if vmIsRunning; then
 			echo "New potentially corrupt VM left running: $VM_NAME" >"$DEBUGOUT"
+			echo "Opening Parallels GUI" >"$DEBUGOUT"
+			open -a "Parallels Desktop.app"
 		elif { sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
 			echo "New potentially corrupt VM left in place: $VM_NAME" >"$DEBUGOUT"
 		fi
@@ -546,9 +548,23 @@ cat >"$PACKAGEBUILD_DIR"/config.sh <<-EOF
 EOF
 
 echo "Creating post-installation configuration package..." >"$VERBOSEOUT"
-if [ -r ~/.ssh/id_ecdsa.pub ]; then
-	cp ~/.ssh/id_ecdsa.pub "$PACKAGEBUILD_DIR"
+keyfile=""
+SUDO_HOME="$(id -P "$USERNAME" | cut -f9 -d:)"
+for alg in ed25519_sk ed25519 ecdsa_sk ecdsa dsa rsa; do
+	if [ -r "$SUDO_HOME"/.ssh/id_$alg ] && [ -r "$SUDO_HOME"/.ssh/id_$alg.pub ]; then
+		keyfile="$SUDO_HOME"/.ssh/id_$alg
+		break
+	fi
+done
+if [ -z "$keyfile" ]; then
+	keyfile="$MKMACVM_TEMPDIR/id_ed25519"
+	if ! ssh-keygen -q -t ed25519 -f "$keyfile" -N ""; then
+		echo "Unable to find or create SSH key for VM logins" >&2
+		exit 1
+	fi
 fi
+cp "$keyfile.pub" "$PACKAGEBUILD_DIR"
+
 if [ -r "$(dirname "$0")"/postinstall ]; then
 	cp "$(dirname "$0")"/postinstall "$PACKAGEBUILD_DIR"
 	chmod 0755 "$PACKAGEBUILD_DIR"/postinstall
@@ -568,8 +584,7 @@ echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" "$PRLCTL" create "$VM_NAME" -o macos; } >"$DEBUGOUT"
 {
 	sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" --cpus auto --memsize auto \
-		--isolate-vm on \
-		--startup-view headless
+		--isolate-vm on
 } >"$DEBUGOUT"
 VM_HOME="$(sudo -u "$USERNAME" "$PRLCTL" list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
 mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
@@ -643,16 +658,23 @@ waitForInstallation() {
 		sleep 5
 	done
 }
+login_message="mkmacvm login success"
 waitForSshKey() {
 	tries=30
 	success=""
-	# Use -t here to allocate a terminal so it's logged in system.log and the
-	# installer program can tell that we logged on
 	while [ 0 -lt "$tries" ] && [ -z "$success" ]; do
 		if sudo -u "$USERNAME" \
-			ssh -t -o StrictHostKeyChecking=no \
-			-o ConnectTimeout=5 "$VM_HOSTNAME" \
-			true; then
+			ssh \
+			-q \
+			-F none \
+			-o StrictHostKeyChecking=no \
+			-o ConnectTimeout=5 \
+			-o ChallengeResponseAuthentication=no \
+			-o PasswordAuthentication=no \
+			-o UserKnownHostsFile=/dev/null \
+			-i "$keyfile" \
+			"$VM_HOSTNAME" \
+			"syslog -s -l notice '$login_message'"; then
 			success=yes
 		else
 			tries="$((tries - 1))"
@@ -666,14 +688,12 @@ waitForSshKey() {
 }
 waitForInstallation || exit 1 # which actually ensures the hostname is found and has port 22 open
 echo "Setting up local ssh access..." >"$VERBOSEOUT"
-{ sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT" 2>&1
 waitForSshKey || exit 1
 
 echo "Shutting down the virtual machine..." >"$VERBOSEOUT"
 while vmIsRunning; do
 	sleep 5
 done
-{ sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" --startup-view window; } >"$DEBUGOUT"
 
 echo "" >"$VERBOSEOUT"
 echo "********************************************" >"$VERBOSEOUT"
