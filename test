@@ -94,7 +94,8 @@ installParallels() {
 		kTCCServiceMicrophone \
 		kTCCServiceSystemPolicyDesktopFolder \
 		kTCCServiceSystemPolicyDocumentsFolder \
-		kTCCServiceSystemPolicyDownloadsFolder; do
+		kTCCServiceSystemPolicyDownloadsFolder \
+		kTCCServiceAccessibility; do
 		sqlite3 "$tccfile" \
 			"insert or replace into access (
 				service,
