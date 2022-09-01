@@ -13,7 +13,7 @@ jobs:
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
       - name: revoke key
-        if: cancelled()
+        if: always()
         run: |
           if [ -e /usr/local/bin/prlsrvctl ]; then
               /usr/local/bin/prlsrvctl deactivate-license
@@ -29,7 +29,13 @@ jobs:
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY}}
           DEBUG: y
+      - name: revoke key
+        if: always()
+        run: |
+          if [ -e /usr/local/bin/prlsrvctl ]; then
+              /usr/local/bin/prlsrvctl deactivate-license
+          fi
       - uses: OrbitalOwen/desktop-screenshot-action@0.1
-        if: failure()
+        if: always()
         with:
           file-name: "desktop.jpg"

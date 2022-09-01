@@ -581,19 +581,22 @@ chown "$USERNAME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg"
 echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 # The VM can only be seen and modified by the creating
 # user, so all prlctl commands must be done via "reverse sudo"
-{ sudo -u "$USERNAME" "$PRLCTL" create "$VM_NAME" -o macos; } >"$DEBUGOUT"
-{
-	sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" --cpus auto --memsize auto \
-		--isolate-vm on
-} >"$DEBUGOUT"
-VM_HOME="$(sudo -u "$USERNAME" "$PRLCTL" list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
-mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
-{
-	sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" \
+if ! { sudo -u "$USERNAME" "$PRLCTL" create "$VM_NAME" -o macos; } >"$DEBUGOUT" \
+	|| ! { sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" \
+		--cpus auto --memsize auto --isolate-vm on; } >"$DEBUGOUT"; then
+	echo "Unable to create virtual machine" >&2
+	exit 1
+fi
+if ! VM_HOME="$(sudo -u "$USERNAME" "$PRLCTL" list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')" \
+	|| [ -z "$VM_HOME" ] \
+	|| ! mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME" \
+	|| ! { sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" \
 		--device-set "cdrom0" \
 		--image "$VM_HOME/$INSTALLER_IMAGENAME".dmg \
-		--connect
-} >"$DEBUGOUT"
+		--connect; } >"$DEBUGOUT"; then
+	echo "Unable to attach installation image to virtual machine" >&2
+	exit 1
+fi
 
 echo "Starting virtual machine..." >"$VERBOSEOUT"
 { sudo -u "$USERNAME" "$PRLCTL" start "$VM_NAME"; } >"$DEBUGOUT"
