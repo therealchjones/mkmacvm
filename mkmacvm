@@ -647,7 +647,7 @@ getTime() {
 }
 waitForInstallation() {
 	starttime="$(getTime)"
-	maxtime="$((6 * 60 * 60))" # 6 hours, in seconds
+	maxtime="$((4 * 60 * 60))" # 4 hours, in seconds
 	until sshIsRunning; do
 		time="$(getTime)"
 		if [ -z "$starttime" ] || [ -z "$time" ]; then
