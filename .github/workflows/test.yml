@@ -4,27 +4,34 @@ on:
   pull_request:
 concurrency: uses-parallels-key
 jobs:
-  run:
-    runs-on: macos-12
-    steps:
-      - uses: actions/checkout@v3.0.2
-      - uses: mxschmitt/action-tmate@v3
-      - name: test mkmacvm
-        run: "$GITHUB_WORKSPACE/test"
-        env:
-          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
-      - name: revoke key
-        if: always()
-        run: |
-          if [ -e /usr/local/bin/prlsrvctl ]; then
-              /usr/local/bin/prlsrvctl deactivate-license
-          fi
+  #   run:
+  #     runs-on: macos-12
+  #     steps:
+  #       - uses: actions/checkout@v3.0.2
+  #       - name: test mkmacvm
+  #         run: "$GITHUB_WORKSPACE/test"
+  #         env:
+  #           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+  #       - name: revoke key
+  #         if: always()
+  #         run: |
+  #           if [ -e /usr/local/bin/prlsrvctl ]; then
+  #               /usr/local/bin/prlsrvctl deactivate-license
+  #           fi
   debug:
-    if: failure()
-    needs: run
+    # if: failure()
+    # needs: run
     runs-on: macos-12
     steps:
       - uses: actions/checkout@v3.0.2
+      - name: open ngrok connection
+        run: |
+          brew install ngrok/ngrok/ngrok --no-quarantine
+          ngrok config add-authtoken "$NGROK_TOKEN"
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+          ngrok tcp 22 &
+        env:
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
       - name: test mkmacvm
         run: "$GITHUB_WORKSPACE/test"
         env:
