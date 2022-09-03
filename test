@@ -21,74 +21,130 @@
 set -e
 set -u
 
+PATH="$PATH:/usr/local/bin"
+DEBUG="${DEBUG:-}"
+VERBOSE="${VERBOSE:-y}"
+CI="${CI:-}"                         # set to "true" by GitHub Actions
+GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" # set to "true" by GitHub Actions
+DEBUGOUT="/dev/null"
+VERBOSEOUT="/dev/null"
+if [ -n "$DEBUG" ]; then
+	set +x
+	VERBOSE=y
+	DEBUGOUT="/dev/stdout"
+fi
+if [ -n "$VERBOSE" ]; then
+	VERBOSEOUT="/dev/stdout"
+fi
+export PATH DEBUG VERBOSE
+PROGRAMNAME="$(basename "$0")" || exit 1
+PROGRAMDIRECTORY="$(dirname "$0")" || exit 1
+MKMACVM="$PROGRAMDIRECTORY/mkmacvm"
+if [ ! -e "$MKMACVM" ]; then
+	echo "Error: Unable to locate mkmacvm. It must be in the same" >&2
+	echo "       directory as $PROGRAMNAME, $PROGRAMDIRECTORY" >&2
+	exit 1
+fi
+
 main() {
-	export PATH="$PATH:/usr/local/bin"
-	programname="$(basename "$0")"
-	programdirectory="$(dirname "$0")"
-	CI="${CI:-}"                         # set to "true" by GitHub Actions
-	GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" # set to "true" by GitHub Actions
-	if [ "0" != "$(id -u)" ]; then
-		if [ "true" = "$CI" ] && [ "true" = "$GITHUB_ACTIONS" ]; then
-			echo "Executing with root privileges on GitHub runner"
-		else
-			echo "'$programname' requires root privileges. Please authenticate."
+	if [ true = "$GITHUB_ACTIONS" ] || [ true = "$CI" ]; then
+		if [ true != "$GITHUB_ACTIONS" ] || [ true != "$CI" ]; then
+			echo "Error: GITHUB_ACTIONS = '$GITHUB_ACTIONS' but CI = '$CI'" >&2
+			echo "       They should both be true or both be not true." >&2
+			echo "       Exiting." >&2
 		fi
-		exec sudo -E "$0" "$@"
-	elif [ -z "$SUDO_USER" ] || [ "0" = "$SUDO_UID" ]; then
-		echo "Error: 'programname' should be run as a regular user." >&2
 	fi
-	username="$SUDO_USER"
-	MKMACVM="$programdirectory/mkmacvm"
-	if [ ! -e "$MKMACVM" ]; then
-		echo "Error: Unable to locate mkmacvm. It must be in the same" >&2
-		echo "       directory as $programname, $programdirectory" >&2
+	# from now on we may check CI alone without worrying about both
+	if [ "0" != "$(id -u)" ]; then
+		if [ -n "${TEST_MKMACVM_REEXECUTE:=}" ]; then
+			echo 'Error: unable to obtain necessary privileges' >&2
+			exit 1
+		fi
+		echo "Obtaining necessary privileges via 'sudo'" >"$VERBOSEOUT"
+		export TEST_MKMACVM_REEXECUTE=y
+		exec sudo -E "$0" "$@"
+	elif [ -z "${SUDO_USER:=}" ] || [ "0" = "${SUDO_UID:=}" ]; then
+		echo "Error: 'SUDO_USER' is empty or 'SUDO_UID' is 0. '$PROGRAMNAME'" >&2
+		echo "       should be run as a regular user, and will invoke sudo." >&2
+		echo "       as needed." >&2
 		exit 1
 	fi
-	if [ "true" = "$CI" ] && [ "true" = "$GITHUB_ACTIONS" ]; then
-		# running on GitHub-hosted runner
+
+	username="$SUDO_USER"
+
+	if [ "true" = "$CI" ]; then
 		# can install parallels from brew and python's probably already
 		# installed
-		echo "Testing mkmacvm on GitHub runner"
-		if ! brew --version >/dev/null; then
+		echo "Testing mkmacvm on GitHub runner" >"$VERBOSEOUT"
+		if ! brew --version >"$DEBUGOUT"; then
 			echo "Error: Homebrew is not installed on this GitHub runner." >&2
 			exit 1
 		fi
 		installParallels || exit 1
-		VERBOSE=y "$MKMACVM" || exit 1
 	else
 		# running on local machine
 		# change as little as possible
 		# don't run if requirements aren't met (just defer to mkmacvm)
-		echo "Testing mkmacvm on local system"
-		VERBOSE=y "$MKMACVM" || exit 1
+		echo "Testing mkmacvm on local system" >"$VERBOSEOUT"
+	fi
+	if ! "$MKMACVM"; then
+		echo 'mkmacvm FAIL' >"$VERBOSEOUT"
+		exit 1
+	else
+		echo 'mkmacvm SUCCESS' >"$VERBOSEOUT"
+		exit 0
 	fi
 }
 deactivateParallels() {
-	echo "Deactivating Parallels Desktop"
-	sudo -u "$username" "$PRLSRVCTL" deactivate-license
+	echo "Deactivating Parallels Desktop" >"$VERBOSEOUT"
+	{ sudo -u "$username" "$PRLSRVCTL" deactivate-license; } >"$DEBUGOUT" 2>&1
 }
 getexec() {
 	if [ 1 != "$#" ]; then
 		echo "getexec accepts exactly 1 parameter" >&2
 		return 1
 	fi
-	if sudo -u "$username" type "$1" >/dev/null 2>&1; then
+	if output="$({ sudo -u "$username" type "$1"; })"; then
 		echo "$1"
 	elif [ -e "/usr/local/bin/$1" ]; then
 		echo "/usr/local/bin/$1"
 	else
+		# If foo is not found, type foo outputs 'foo not found' to stdout, not
+		# stderr. This changes that.
+		echo "$output" >&2
 		return 1
 	fi
 }
 installParallels() {
-	echo "Installing Parallels Desktop with Homebrew"
+	echo "Installing Parallels Desktop with Homebrew" >"$VERBOSEOUT"
 	if [ -z "${PARALLELS_KEY:=}" ]; then
 		echo "Error: 'PARALLELS_KEY' is not set; cannot activate Parallels Desktop" >&2
 		return 1
 	fi
-	sudo -u "$username" brew update || return 1
-	sudo -u "$username" brew install parallels --no-quarantine || return 1
-	csreq="fade0c00000000ac0000000100000006000000060000000600000006000000020000001d636f6d2e706172616c6c656c732e6465736b746f702e636f6e736f6c650000000000000f0000000e000000010000000a2a864886f763640602060000000000000000000e000000000000000a2a864886f7636406010d0000000000000000000b000000000000000a7375626a6563742e4f550000000000010000000a344336333634414358540000"
+	if ! output="$({ sudo -u "$username" brew update; } 2>&1)"; then
+		echo "$output" >&2
+		# but don't necessarily fail here
+	fi
+	if ! output="$({ sudo -u "$username" brew install parallels --no-quarantine; } 2>&1)"; then
+		echo "$output" >&2
+		echo "Error: Unable to install Parallels Desktop" >&2
+		return 1
+	fi
+	# See, among others,
+	# https://www.rainforestqa.com/blog/macos-tcc-db-deep-dive and
+	# https://stackoverflow.com/questions/52706542/how-to-get-csreq-of-macos-application-on-command-line/57259004#57259004
+	echo "Adding permissions for Parallels Desktop" >"$VERBOSEOUT"
+	if ! csreq="$(
+		codesign -d -r - /Applications/Parallels\ Desktop.app \
+			| sed -E -e 's/^designated => //' \
+			| csreq -r - -b /dev/stdout \
+			| xxd -p \
+			| tr -d '\n'
+	)" 2>"$DEBUGOUT"; then
+		echo "$csreq" >&2
+		echo "Error: Unable to add required permissions to Parallels" >&2
+		return 1
+	fi
 	tccfile="/Users/$username/Library/Application Support/com.apple.TCC/TCC.db"
 	for perm in kTCCServiceCamera \
 		kTCCServiceMicrophone \
@@ -123,7 +179,7 @@ installParallels() {
 		return 1
 	fi
 	trap 'deactivateParallels' EXIT
-	if ! sudo -u "$username" "$PRLSRVCTL" install-license -k "$PARALLELS_KEY"; then
+	if ! { sudo -u "$username" "$PRLSRVCTL" install-license -k "$PARALLELS_KEY"; } >"$DEBUGOUT"; then
 		error="Error: Unable to activate Parallels Desktop"
 		error="${error}\n       If necessary, revoke current activation keys at"
 		error="${error}\n       https://my.parallels.com"
