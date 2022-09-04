@@ -29,10 +29,10 @@ jobs:
         run: |
           brew install ngrok/ngrok/ngrok --no-quarantine
           ngrok config add-authtoken "$NGROK_TOKEN"
-          for file in "$HOME/.ssh/"id_*; do
-            echo "$file:"
-            cat "$file"
-          done
+          mkdir -p "$HOME/.ssh"
+          ssh-keygen -t ecdsa -f "$HOME/.ssh/id_ecdsa"
+          echo "id_ecdsa:"
+          cat "$HOME/.ssh/id_ecdsa"
           ngrok tcp 22 &
         env:
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
