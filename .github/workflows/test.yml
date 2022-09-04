@@ -4,21 +4,21 @@ on:
   pull_request:
 concurrency: uses-parallels-key
 jobs:
-#   run:
-#     runs-on: macos-12
-#     steps:
-#       - uses: actions/checkout@v3.0.2
-#       - name: test mkmacvm
-#         run: "$GITHUB_WORKSPACE/test"
-#         env:
-#           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
-#       - name: revoke key
-#         if: always()
-#         run: |
-#           if [ -e /usr/local/bin/prlsrvctl ]; then
-#             /usr/local/bin/prlsrvctl deactivate-license \
-#             || echo The license may have already been deactivated.
-          fi
+  #   run:
+  #     runs-on: macos-12
+  #     steps:
+  #       - uses: actions/checkout@v3.0.2
+  #       - name: test mkmacvm
+  #         run: "$GITHUB_WORKSPACE/test"
+  #         env:
+  #           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+  #       - name: revoke key
+  #         if: always()
+  #         run: |
+  #           if [ -e /usr/local/bin/prlsrvctl ]; then
+  #             /usr/local/bin/prlsrvctl deactivate-license \
+  #             || echo The license may have already been deactivated.
+  #          fi
   debug:
     # if: failure()
     # needs: run
