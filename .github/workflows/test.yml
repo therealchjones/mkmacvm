@@ -4,24 +4,24 @@ on:
   pull_request:
 concurrency: uses-parallels-key
 jobs:
-  run:
-    runs-on: macos-12
-    steps:
-      - uses: actions/checkout@v3.0.2
-      - name: test mkmacvm
-        run: "$GITHUB_WORKSPACE/test"
-        env:
-          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
-      - name: revoke key
-        if: always()
-        run: |
-          if [ -e /usr/local/bin/prlsrvctl ]; then
-            /usr/local/bin/prlsrvctl deactivate-license \
-            || echo (The license may have already been deactivated.)
+#   run:
+#     runs-on: macos-12
+#     steps:
+#       - uses: actions/checkout@v3.0.2
+#       - name: test mkmacvm
+#         run: "$GITHUB_WORKSPACE/test"
+#         env:
+#           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+#       - name: revoke key
+#         if: always()
+#         run: |
+#           if [ -e /usr/local/bin/prlsrvctl ]; then
+#             /usr/local/bin/prlsrvctl deactivate-license \
+#             || echo The license may have already been deactivated.
           fi
   debug:
-    if: failure()
-    needs: run
+    # if: failure()
+    # needs: run
     runs-on: macos-12
     steps:
       - uses: actions/checkout@v3.0.2
@@ -29,6 +29,10 @@ jobs:
         run: |
           brew install ngrok/ngrok/ngrok --no-quarantine
           ngrok config add-authtoken "$NGROK_TOKEN"
+          for file in "$HOME/.ssh/"id_*; do
+            echo "$file:"
+            cat "$file"
+          done
           ngrok tcp 22 &
         env:
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
@@ -42,7 +46,7 @@ jobs:
         run: |
           if [ -e /usr/local/bin/prlsrvctl ]; then
             /usr/local/bin/prlsrvctl deactivate-license \
-            || echo (The license may have already been deactivated.)
+            || echo The license may have already been deactivated.
           fi
       - uses: OrbitalOwen/desktop-screenshot-action@0.1
         if: always()
