@@ -4,49 +4,15 @@ on:
   pull_request:
 concurrency: uses-parallels-key
 jobs:
-  #   run:
-  #     runs-on: macos-12
-  #     steps:
-  #       - uses: actions/checkout@v3.0.2
-  #       - name: test mkmacvm
-  #         run: "$GITHUB_WORKSPACE/test"
-  #         env:
-  #           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
-  #       - name: revoke key
-  #         if: always()
-  #         run: |
-  #           if [ -e /usr/local/bin/prlsrvctl ]; then
-  #             /usr/local/bin/prlsrvctl deactivate-license \
-  #             || echo The license may have already been deactivated.
-  #          fi
-  debug:
-    # if: failure()
-    # needs: run
+  run:
     runs-on: macos-12
     steps:
-      - uses: actions/checkout@v3.0.2
-      - name: enable SSH
-        run: |
-          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
-          brew install ngrok/ngrok/ngrok --no-quarantine
-          ngrok tcp --authtoken "$NGROK_TOKEN" --log stdout --log-format logfmt 22 &
-          mkdir -p "$HOME/.ssh"
-          mkdir -p "$HOME/github-runner-ssh"
-          ssh-keygen -q -N "" -t rsa -f "$HOME/.ssh/id_rsa"
-          cp "$HOME/.ssh/id_rsa" "$HOME/github-runner-ssh/github_runner_rsa"
-          cat "$HOME/.ssh/id_rsa.pub" >> "$HOME/.ssh/authorized_keys"
-          chmod 0600 "$HOME/.ssh/"*
-          chmod 0700 "$HOME/.ssh"
-          echo 'github runner private key:'
-          cat "$HOME/github-runner-ssh/github_runner_rsa"
-          echo SSH configured. Download connection script from Artifacts.
-        env:
-          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
-      - name: test mkmacvm in debug mode
+      - name: checkout repository
+        uses: actions/checkout@v3.0.2
+      - name: test mkmacvm
         run: "$GITHUB_WORKSPACE/test"
         env:
-          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY}}
-          DEBUG: y
+          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
       - name: deactivate Parallels Desktop
         if: always()
         run: |
@@ -65,14 +31,9 @@ jobs:
               echo "$output"
             fi
           else
-            error="Unable to deactivate Parallels Desktop: prlsrvctl not found" >&2
+            error="Unable to deactivate Parallels Desktop: prlsrvctl not found"
             error="$error\nYou may be able to deactivate Parallels Desktop at"
-            error="$error\nhttps://my.parallels.com""
+            error="$error\nhttps://my.parallels.com"
             echo "$error" >&2
             exit 1
           fi
-      - name: take desktop screenshot
-        uses: OrbitalOwen/desktop-screenshot-action@0.1
-        if: always()
-        with:
-          file-name: "desktop.jpg"
