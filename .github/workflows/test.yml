@@ -33,7 +33,7 @@ jobs:
           cat >"$idfile"<<end_of_key
           EOF
           cat "$HOME/github_runner_rsa" >> "$HOME/github-runner-connect"
-          cat >>"$HOME/github-runner-connect" <EOF
+          cat >>"$HOME/github-runner-connect" <<EOF
           end_of_key
           chmod 0600 "$idfile"
           EOF
