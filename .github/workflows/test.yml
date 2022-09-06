@@ -130,8 +130,9 @@ jobs:
         if: ${{ inputs.debug }}
         run: echo "DEBUG=y" >> "$GITHUB_ENV"
       - name: test mkmacvm
-        run: sudo -E "$GITHUB_WORKSPACE/test"
+        run: sudo -E "$GITHUB_WORKSPACE/mkmacvm"
         env:
+          VERBOSE: y
           DEBUG: ${{ env.DEBUG }}
       - name: take desktop screenshot
         uses: OrbitalOwen/desktop-screenshot-action@0.1
