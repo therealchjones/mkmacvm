@@ -26,12 +26,10 @@ DEBUG="${DEBUG:-}"
 VERBOSE="${VERBOSE:-y}"
 CI="${CI:-}"                         # set to "true" by GitHub Actions
 GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" # set to "true" by GitHub Actions
-DEBUGOUT="/dev/null"
 VERBOSEOUT="/dev/null"
 if [ -n "$DEBUG" ]; then
-	set +x
+	set -x
 	VERBOSE=y
-	DEBUGOUT="/dev/stdout"
 fi
 if [ -n "$VERBOSE" ]; then
 	VERBOSEOUT="/dev/stdout"
@@ -54,19 +52,9 @@ main() {
 			echo "       Exiting." >&2
 		fi
 	fi
-	# from now on we may check CI alone without worrying about both
-	if [ "0" != "$(id -u)" ]; then
-		if [ -n "${TEST_MKMACVM_REEXECUTE:=}" ]; then
-			echo 'Error: unable to obtain necessary privileges' >&2
-			exit 1
-		fi
-		echo "Obtaining necessary privileges via 'sudo'" >"$VERBOSEOUT"
-		export TEST_MKMACVM_REEXECUTE=y
-		exec sudo -E "$0" "$@"
-	elif [ -z "${SUDO_USER:=}" ] || [ "0" = "${SUDO_UID:=}" ]; then
+	if [ -z "${SUDO_USER:=}" ] || [ "0" = "${SUDO_UID:=}" ]; then
 		echo "Error: 'SUDO_USER' is empty or 'SUDO_UID' is 0. '$PROGRAMNAME'" >&2
-		echo "       should be run as a regular user, and will invoke sudo." >&2
-		echo "       as needed." >&2
+		echo "       should be run as with sudo." >&2
 		exit 1
 	fi
 
@@ -76,11 +64,6 @@ main() {
 		# can install parallels from brew and python's probably already
 		# installed
 		echo "Testing mkmacvm on GitHub runner" >"$VERBOSEOUT"
-		if ! brew --version >"$DEBUGOUT"; then
-			echo "Error: Homebrew is not installed on this GitHub runner." >&2
-			exit 1
-		fi
-		installParallels || exit 1
 	else
 		# running on local machine
 		# change as little as possible
@@ -108,79 +91,6 @@ getexec() {
 		# If foo is not found, type foo outputs 'foo not found' to stdout, not
 		# stderr. This changes that.
 		echo "$output" >&2
-		return 1
-	fi
-}
-installParallels() {
-	echo "Installing Parallels Desktop with Homebrew" >"$VERBOSEOUT"
-	if [ -z "${PARALLELS_KEY:=}" ]; then
-		echo "Error: 'PARALLELS_KEY' is not set; cannot activate Parallels Desktop" >&2
-		return 1
-	fi
-	if ! output="$({ sudo -u "$username" brew update; } 2>&1)"; then
-		echo "$output" >&2
-		# but don't necessarily fail here
-	fi
-	if ! output="$({ sudo -u "$username" brew install parallels --no-quarantine; } 2>&1)"; then
-		echo "$output" >&2
-		echo "Error: Unable to install Parallels Desktop" >&2
-		return 1
-	fi
-	# See, among others,
-	# https://www.rainforestqa.com/blog/macos-tcc-db-deep-dive and
-	# https://stackoverflow.com/questions/52706542/how-to-get-csreq-of-macos-application-on-command-line/57259004#57259004
-	echo "Adding permissions for Parallels Desktop" >"$VERBOSEOUT"
-	if ! csout="$(codesign -d -r - /Applications/Parallels\ Desktop.app 2>&1)" \
-		|| ! csreq="$(
-			echo "$csout" \
-				| sed -E -e '/^designated =>/!d' -e 's/^designated => //' \
-				| csreq -r - -b /dev/stdout \
-				| xxd -p \
-				| tr -d '\n'
-		)"; then
-		echo "$csout" >&2
-		echo "$csreq" >&2
-		echo "Error: Unable to add required permissions to Parallels" >&2
-		return 1
-	fi
-	tccfile="/Users/$username/Library/Application Support/com.apple.TCC/TCC.db"
-	for perm in kTCCServiceCamera \
-		kTCCServiceMicrophone \
-		kTCCServiceSystemPolicyDesktopFolder \
-		kTCCServiceSystemPolicyDocumentsFolder \
-		kTCCServiceSystemPolicyDownloadsFolder \
-		kTCCServiceAccessibility; do
-		sqlite3 "$tccfile" \
-			"insert or replace into access (
-				service,
-				client,
-				client_type,
-				auth_value,
-				auth_reason,
-				auth_version,
-				csreq,
-				flags
-			) values (
-				'$perm',
-				'com.parallels.desktop.console',
-				0,
-				2,
-				3,
-				1,
-				X'$csreq',
-				0
-			)"
-	done
-	echo "Activating Parallels Desktop"
-	if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
-		echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
-		return 1
-	fi
-	if ! { sudo -u "$username" "$PRLSRVCTL" install-license -k "$PARALLELS_KEY"; } >"$DEBUGOUT"; then
-		error="Error: Unable to activate Parallels Desktop"
-		error="${error}\n       If necessary, revoke current activation keys at"
-		error="${error}\n       https://my.parallels.com"
-		printf "%s\n" "$error" >&2
 		return 1
 	fi
 }
