@@ -52,25 +52,27 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v3.0.2
       - name: install Parallels Desktop
+        env:
+          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
         run: |
-          echo "Installing Parallels Desktop with Homebrew" >"$VERBOSEOUT"
+          echo "Installing Parallels Desktop with Homebrew"
           if [ -z "${PARALLELS_KEY:=}" ]; then
             echo "Error: 'PARALLELS_KEY' is not set; cannot activate Parallels Desktop" >&2
-            return 1
+            exit 1
           fi
-          if ! output="$({ sudo -u "$username" brew update; } 2>&1)"; then
+          if ! output="$( brew update 2>&1)"; then
             echo "$output" >&2
             # but don't necessarily fail here
           fi
-          if ! output="$({ sudo -u "$username" brew install parallels --no-quarantine; } 2>&1)"; then
+          if ! output="$(brew install parallels --no-quarantine 2>&1)"; then
             echo "$output" >&2
             echo "Error: Unable to install Parallels Desktop" >&2
-            return 1
+            exit 1
           fi
           # See, among others,
           # https://www.rainforestqa.com/blog/macos-tcc-db-deep-dive and
           # https://stackoverflow.com/questions/52706542/how-to-get-csreq-of-macos-application-on-command-line/57259004#57259004
-          echo "Adding permissions for Parallels Desktop" >"$VERBOSEOUT"
+          echo "Adding permissions for Parallels Desktop"
           if ! csout="$(codesign -d -r - /Applications/Parallels\ Desktop.app 2>&1)" \
             || ! csreq="$(
               echo "$csout" \
@@ -82,9 +84,9 @@ jobs:
             echo "$csout" >&2
             echo "$csreq" >&2
             echo "Error: Unable to add required permissions to Parallels" >&2
-            return 1
+            exit 1
           fi
-          tccfile="/Users/$username/Library/Application Support/com.apple.TCC/TCC.db"
+          tccfile="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
           for perm in kTCCServiceCamera \
             kTCCServiceMicrophone \
             kTCCServiceSystemPolicyDesktopFolder \
@@ -113,28 +115,24 @@ jobs:
               )"
           done
           echo "Activating Parallels Desktop"
-          if [ -z "${PRLSRVCTL:=$(getexec prlsrvctl)}" ]; then
+          if [ ! -e /usr/local/bin/prlsrvctl ]; then
             echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
-            return 1
+            exit 1
           fi
-          if ! { sudo -u "$username" "$PRLSRVCTL" install-license -k "$PARALLELS_KEY"; } >"$DEBUGOUT"; then
+          if ! /usr/local/bin/prlsrvctl install-license -k "$PARALLELS_KEY"; then
             error="Error: Unable to activate Parallels Desktop"
             error="${error}\n       If necessary, revoke current activation keys at"
             error="${error}\n       https://my.parallels.com"
             printf "%s\n" "$error" >&2
-            return 1
+            exit 1
           fi
+      - name: set debug mode
+        if: ${{ inputs.debug }}
+        run: echo "DEBUG=y" >> "$GITHUB_ENV"
       - name: test mkmacvm
-        if: ${{ ! inputs.debug }}
         run: sudo -E "$GITHUB_WORKSPACE/test"
         env:
-          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
-      - name: test mkmacvm in debug mode
-        if: inputs.debug
-        run: sudo -E "$GITHUB_WORKSPACE/test"
-        env:
-          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
-          DEBUG: y
+          DEBUG: ${{ env.DEBUG }}
       - name: take desktop screenshot
         uses: OrbitalOwen/desktop-screenshot-action@0.1
         if: failure() || inputs.debug
