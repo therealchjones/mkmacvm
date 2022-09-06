@@ -1,18 +1,71 @@
 name: test
 on:
   workflow_dispatch:
+    inputs:
+      debug:
+        description: "Debug mode"
+        required: true
+        type: boolean
   pull_request:
 concurrency: uses-parallels-key
 jobs:
   run:
     runs-on: macos-12
     steps:
+      - name: enable SSH
+        if: inputs.debug
+        run: |
+          brew install ngrok/ngrok/ngrok --no-quarantine
+          ngrok tcp --log "$HOME/ngrok.log" --log-format logfmt 22 &
+          mkdir -p "$HOME/.ssh"
+          mkdir -p "$HOME/github-runner-ssh"
+          ssh-keygen -q -N "" -t rsa -f "$HOME/github_runner_rsa"
+          cat "$HOME/github_runner_rsa.pub" >> "$HOME/.ssh/authorized_keys"
+          chmod 0600 "$HOME/.ssh/"*
+          chmod 0700 "$HOME/.ssh"
+          ngrok_connection="$( grep 'msg="started tunnel"' "$HOME/ngrok.log" | head -n 1)"
+          ngrok_url="${ngrok_connection##*url=tcp://}"
+          ngrok_port="${ngrok_url##*:}"
+          ngrok_address="${ngrok_url%:"$ngrok_port"}"
+          cat >"$HOME/github-runner-connect" <<EOF
+          #!/bin/sh
+          id_file="$(mktemp)"
+          cat >"$idfile"<<end_of_key
+          EOF
+          cat "$HOME/github_runner_rsa" >> "$HOME/github-runner-connect"
+          cat >>"$HOME/github-runner-connect" <EOF
+          end_of_key
+          chmod 0600 "$idfile"
+          EOF
+          echo 'ssh -i "$idfile" -p '"$ngrok_port runner@$ngrok_address" \
+          >> "$HOME/github-runner-connect"
+          chmod 0755 "$HOME/github-runner-connect"
+          echo 'SSH configured; get connection script from Artifacts'
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_TOKEN }}
+      - name: save SSH connection script
+        if: success() && inputs.debug
+        uses: actions/upload-artifact@v3
+        with:
+          name: github-runner-connect
+          path: ~/github-runner-connect
       - name: checkout repository
         uses: actions/checkout@v3.0.2
       - name: test mkmacvm
+        if: ! inputs.debug
         run: "$GITHUB_WORKSPACE/test"
         env:
           PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+      - name: test mkmacvm in debug mode
+        if: inputs.debug
+        run: "$GITHUB_WORKSPACE/test"
+        env:
+          PARALLELS_KEY: ${{ secrets.PARALLELS_KEY }}
+      - name: take desktop screenshot
+        uses: OrbitalOwen/desktop-screenshot-action@0.1
+        if: failure() || inputs.debug
+        with:
+          file-name: "desktop.jpg"
       - name: deactivate Parallels Desktop
         if: always()
         run: |

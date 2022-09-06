@@ -95,10 +95,6 @@ main() {
 		exit 0
 	fi
 }
-deactivateParallels() {
-	echo "Deactivating Parallels Desktop" >"$VERBOSEOUT"
-	{ sudo -u "$username" "$PRLSRVCTL" deactivate-license; } >"$DEBUGOUT" 2>&1
-}
 getexec() {
 	if [ 1 != "$#" ]; then
 		echo "getexec accepts exactly 1 parameter" >&2
@@ -134,13 +130,15 @@ installParallels() {
 	# https://www.rainforestqa.com/blog/macos-tcc-db-deep-dive and
 	# https://stackoverflow.com/questions/52706542/how-to-get-csreq-of-macos-application-on-command-line/57259004#57259004
 	echo "Adding permissions for Parallels Desktop" >"$VERBOSEOUT"
-	if ! csreq="$(
-		codesign -d -r - /Applications/Parallels\ Desktop.app \
-			| sed -E -e 's/^designated => //' \
-			| csreq -r - -b /dev/stdout \
-			| xxd -p \
-			| tr -d '\n'
-	)" 2>"$DEBUGOUT"; then
+	if ! csout="$(codesign -d -r - /Applications/Parallels\ Desktop.app 2>&1)" \
+		|| ! csreq="$(
+			echo "$csout" \
+				| sed -E -e '/^designated =>/!d' -e 's/^designated => //' \
+				| csreq -r - -b /dev/stdout \
+				| xxd -p \
+				| tr -d '\n'
+		)"; then
+		echo "$csout" >&2
 		echo "$csreq" >&2
 		echo "Error: Unable to add required permissions to Parallels" >&2
 		return 1
@@ -178,7 +176,6 @@ installParallels() {
 		echo "Error: Unable to find 'prlsrvctl'. Cannot activate Parallels Desktop." >&2
 		return 1
 	fi
-	trap 'deactivateParallels' EXIT
 	if ! { sudo -u "$username" "$PRLSRVCTL" install-license -k "$PARALLELS_KEY"; } >"$DEBUGOUT"; then
 		error="Error: Unable to activate Parallels Desktop"
 		error="${error}\n       If necessary, revoke current activation keys at"
