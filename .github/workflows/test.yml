@@ -147,7 +147,7 @@ jobs:
               if ! echo "$output" | grep 'activation key is invalid' >/dev/null; then
                 error="$output"
                 error="$error\nYou may be able to deactivate Parallels Desktop at"
-                error="$error\nhttps://my.parallels.com""
+                error="$error\nhttps://my.parallels.com"
                 echo "$error" >&2
                 exit 1
               else
