@@ -27,28 +27,23 @@ jobs:
           ngrok_url="${ngrok_connection##*url=tcp://}"
           ngrok_port="${ngrok_url##*:}"
           ngrok_address="${ngrok_url%:"$ngrok_port"}"
-          cat >"$HOME/github-runner-connect" <<EOF
+          cat >"$HOME/github-runner-connect" <<"EOF"
           #!/bin/sh
           id_file="$(mktemp)"
           cat >"$idfile"<<end_of_key
           EOF
           cat "$HOME/github_runner_rsa" >> "$HOME/github-runner-connect"
-          cat >>"$HOME/github-runner-connect" <<EOF
+          cat >>"$HOME/github-runner-connect" <<"EOF"
           end_of_key
           chmod 0600 "$idfile"
           EOF
           echo 'ssh -i "$idfile" -p '"$ngrok_port runner@$ngrok_address" \
           >> "$HOME/github-runner-connect"
           chmod 0755 "$HOME/github-runner-connect"
-          echo 'SSH configured; get connection script from Artifacts'
+          echo 'SSH configured. To connect, copy and paste the below into a terminal:'
+          cat "$HOME/github-runner-connect"
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_TOKEN }}
-      - name: save SSH connection script
-        if: success() && inputs.debug
-        uses: actions/upload-artifact@v3
-        with:
-          name: github-runner-connect
-          path: ~/github-runner-connect
       - name: checkout repository
         uses: actions/checkout@v3.0.2
       - name: install Parallels Desktop
