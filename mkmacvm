@@ -446,7 +446,10 @@ if [ -e "$INSTALLERAPP_PATH" ]; then
 	PREEXISTINGINSTALLER=y
 else
 	echo "Getting macOS installer..." >"$VERBOSEOUT"
-	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"
+	if ! softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"; then
+		echo "Unable to download macOS $MACOS_VERSION installer" >&2
+		exit 1
+	fi
 	sleep 5
 	if installer_pid="$(pgrep -n osinstallersetupd)"; then
 		# softwareupdate found an installer somewhere else on the disk
