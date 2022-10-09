@@ -6,10 +6,10 @@ Build a simple macOS virtual machine for Parallels Desktop without interaction
 
 mkmacvm is designed to work with:
 
-- macOS 12.5.1 Monterey
-- Paralells Desktop Pro 18
+- macOS 12.6 Monterey
+- Paralells Desktop Pro 18.0.2
 
-mkmacvm may work with older or alternative versions of the above software, but
+mkmacvm may work with older, newer, or alternative versions of the above software, but
 each release of mkmacvm is only tested with its contemporary versions of macOS
 and Parallels Desktop Pro.
 
