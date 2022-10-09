@@ -49,11 +49,34 @@ USERNAME="$SUDO_USER"
 USERREALNAME="$(id -F "$USERNAME")"
 USERREALNAME="${USERREALNAME:-"$USERNAME"}"
 
+# Check for required programs
+getexec() {
+	if [ 1 != "$#" ]; then
+		echo "getexec accepts exactly 1 parameter" >&2
+		return 1
+	fi
+	if sudo -u "$SUDO_USER" type "$1" >/dev/null; then
+		echo "$1"
+	elif [ -e "/usr/local/bin/$1" ]; then
+		echo "/usr/local/bin/$1"
+	else
+		return 1
+	fi
+}
+if ! PRLCTL="$(getexec prlctl)" || [ -z "$PRLCTL" ]; then
+	echo "'prlctl' was not found; $PROGRAMNAME requires Parallels Desktop Pro." >&2
+	exit 1
+fi
+if ! "${PYTHON3:=$(getexec python3)}" --version >"$DEBUGOUT" 2>&1; then
+	echo "Python 3 is not installed; $PROGRAMNAME requires Python 3." >&2
+	exit 1
+fi
+
 # Make sure some things are not already running or in place, so that they
 # can be monitored or shut down later without messing with the system as
 # currently running.
 # prlctl must be run as the end user, not sudo/root
-if sudo -u "$SUDO_USER" prlctl list "$VM_NAME" >/dev/null 2>&1; then
+if sudo -u "$SUDO_USER" "$PRLCTL" list "$VM_NAME" >/dev/null 2>&1; then
 	echo "A virtual machine named '$VM_NAME' already exists. That" >&2
 	echo "makes things confusing. Remove or rename that virtual machine," >&2
 	echo "then try $PROGRAMNAME again." >&2
@@ -213,7 +236,7 @@ getInstallerSharedSupport() {
 VM_ERROR=""
 VM_DONE=""
 vmIsRunning() {
-	if ! { VM_STATUS="$(sudo -u "$USERNAME" prlctl status "$VM_NAME")"; } 2>"$DEBUGOUT"; then
+	if ! { VM_STATUS="$(sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME")"; } 2>"$DEBUGOUT"; then
 		return 2
 	fi
 	if [ -z "${VM_STATUS##VM "$VM_NAME" exist *}" ]; then # this is in the right format
@@ -290,16 +313,16 @@ cleanup() {
 		if vmIsRunning; then
 			if [ "0" = "$RETURNSTATUS" ]; then
 				echo "Shutting down virtual machine..." >"$VERBOSEOUT"
-				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME"; } >"$DEBUGOUT"
+				{ sudo -u "$USERNAME" "$PRLCTL" stop "$VM_NAME"; } >"$DEBUGOUT"
 			else
 				echo "Forcefully shutting down virtual machine..." >"$VERBOSEOUT"
-				{ sudo -u "$USERNAME" prlctl stop "$VM_NAME" --kill; } >"$DEBUGOUT"
+				{ sudo -u "$USERNAME" "$PRLCTL" stop "$VM_NAME" --kill; } >"$DEBUGOUT"
 			fi
 			waitForVmShutdown
 		fi
-		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >$DEBUGOUT 2>&1; then
+		if { sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME"; } >$DEBUGOUT 2>&1; then
 			echo "Removing installation disk image from virtual machine..." >"$VERBOSEOUT"
-			if ! { sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"; then
+			if ! { sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"; then
 				echo "Unable to remove installation disk image from virtual machine." >&2
 				RETURNSTATUS=1
 			fi
@@ -338,7 +361,9 @@ cleanup() {
 	if [ "0" != "$RETURNSTATUS" ] && [ -n "$DEBUG" ]; then
 		if vmIsRunning; then
 			echo "New potentially corrupt VM left running: $VM_NAME" >"$DEBUGOUT"
-		elif { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
+			echo "Opening Parallels GUI" >"$DEBUGOUT"
+			open -a "Parallels Desktop.app"
+		elif { sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
 			echo "New potentially corrupt VM left in place: $VM_NAME" >"$DEBUGOUT"
 		fi
 		LEFT=""
@@ -370,9 +395,9 @@ cleanup() {
 		fi
 	fi
 	if [ "0" != "$RETURNSTATUS" ] && [ -z "$DEBUG" ]; then
-		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
+		if { sudo -u "$USERNAME" "$PRLCTL" status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
 			echo "Removing potentially corrupted VM..." >"$VERBOSEOUT"
-			{ sudo -u "$USERNAME" prlctl delete "$VM_NAME"; } >"$DEBUGOUT"
+			{ sudo -u "$USERNAME" "$PRLCTL" delete "$VM_NAME"; } >"$DEBUGOUT"
 		fi
 	fi
 	echo "Done." >"$VERBOSEOUT"
@@ -421,7 +446,10 @@ if [ -e "$INSTALLERAPP_PATH" ]; then
 	PREEXISTINGINSTALLER=y
 else
 	echo "Getting macOS installer..." >"$VERBOSEOUT"
-	softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"
+	if ! softwareupdate --fetch-full-installer --full-installer-version "$MACOS_VERSION" >"$DEBUGOUT"; then
+		echo "Unable to download macOS $MACOS_VERSION installer" >&2
+		exit 1
+	fi
 	sleep 5
 	if installer_pid="$(pgrep -n osinstallersetupd)"; then
 		# softwareupdate found an installer somewhere else on the disk
@@ -523,9 +551,23 @@ cat >"$PACKAGEBUILD_DIR"/config.sh <<-EOF
 EOF
 
 echo "Creating post-installation configuration package..." >"$VERBOSEOUT"
-if [ -r ~/.ssh/id_ecdsa.pub ]; then
-	cp ~/.ssh/id_ecdsa.pub "$PACKAGEBUILD_DIR"
+keyfile=""
+SUDO_HOME="$(id -P "$USERNAME" | cut -f9 -d:)"
+for alg in ed25519_sk ed25519 ecdsa_sk ecdsa dsa rsa; do
+	if [ -r "$SUDO_HOME"/.ssh/id_$alg ] && [ -r "$SUDO_HOME"/.ssh/id_$alg.pub ]; then
+		keyfile="$SUDO_HOME"/.ssh/id_$alg
+		break
+	fi
+done
+if [ -z "$keyfile" ]; then
+	keyfile="$MKMACVM_TEMPDIR/id_ed25519"
+	if ! ssh-keygen -q -t ed25519 -f "$keyfile" -N ""; then
+		echo "Unable to find or create SSH key for VM logins" >&2
+		exit 1
+	fi
 fi
+cp "$keyfile.pub" "$PACKAGEBUILD_DIR"
+
 if [ -r "$(dirname "$0")"/postinstall ]; then
 	cp "$(dirname "$0")"/postinstall "$PACKAGEBUILD_DIR"
 	chmod 0755 "$PACKAGEBUILD_DIR"/postinstall
@@ -542,33 +584,30 @@ chown "$USERNAME" "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg"
 echo "Creating virtual machine '$VM_NAME'..." >"$VERBOSEOUT"
 # The VM can only be seen and modified by the creating
 # user, so all prlctl commands must be done via "reverse sudo"
-{ sudo -u "$USERNAME" prlctl create "$VM_NAME" -o macos; } >"$DEBUGOUT"
-{
-	sudo -u "$USERNAME" prlctl set "$VM_NAME" --cpus auto --memsize auto \
-		--auto-share-camera off \
-		--nested-virt on \
-		--smart-mount off --shared-cloud off \
-		--sh-app-guest-to-host off \
-		--sh-app-host-to-guest off \
-		--startup-view headless \
-		--adaptive-hypervisor on
-} >"$DEBUGOUT"
-VM_HOME="$(sudo -u "$USERNAME" prlctl list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')"
-mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
-{
-	sudo -u "$USERNAME" prlctl set "$VM_NAME" \
+if ! { sudo -u "$USERNAME" "$PRLCTL" create "$VM_NAME" -o macos; } >"$DEBUGOUT" \
+	|| ! { sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" \
+		--cpus auto --memsize auto --isolate-vm on; } >"$DEBUGOUT"; then
+	echo "Unable to create virtual machine" >&2
+	exit 1
+fi
+if ! VM_HOME="$(sudo -u "$USERNAME" "$PRLCTL" list "$VM_NAME" -i | grep '^Home: ' | sed 's/^Home: //')" \
+	|| [ -z "$VM_HOME" ] \
+	|| ! mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME" \
+	|| ! { sudo -u "$USERNAME" "$PRLCTL" set "$VM_NAME" \
 		--device-set "cdrom0" \
 		--image "$VM_HOME/$INSTALLER_IMAGENAME".dmg \
-		--connect
-} >"$DEBUGOUT"
+		--connect; } >"$DEBUGOUT"; then
+	echo "Unable to attach installation image to virtual machine" >&2
+	exit 1
+fi
 
 echo "Starting virtual machine..." >"$VERBOSEOUT"
-{ sudo -u "$USERNAME" prlctl start "$VM_NAME"; } >"$DEBUGOUT"
+{ sudo -u "$USERNAME" "$PRLCTL" start "$VM_NAME"; } >"$DEBUGOUT"
 
 echo 'Waiting for new virtual machine to start...' >"$VERBOSEOUT"
 getIpAddress() {
 	if ! ipaddress="$(
-		{ sudo -u "$USERNAME" prlctl list -f "$VM_NAME"; } \
+		{ sudo -u "$USERNAME" "$PRLCTL" list -f "$VM_NAME"; } \
 			| sed -E -n "/$VM_NAME"'$/{s/^.+[[:space:]]+([-.0-9]+)[[:space:]]+.+$/\1/;p;}'
 	)" || [ "-" = "$ipaddress" ]; then
 		return 1
@@ -577,57 +616,90 @@ getIpAddress() {
 	fi
 }
 waitForNetwork() {
+	tries=120
 	until VM_IPADDRESS="$(getIpAddress)"; do
+		tries="$((tries - 1))"
+		if [ 0 -ge "$tries" ]; then
+			return 1
+		fi
 		sleep 5
 	done
 }
-waitForNetwork
+if ! waitForNetwork; then
+	echo "Error: Timed out; VM has not joined the network" >&2
+	exit 1
+fi
 echo 'Starting installation...' >"$VERBOSEOUT"
 if ! sudo -u "$USERNAME" \
 	PYTHONPATH="$PYTHONPATH" \
 	SDK_LIBRARY="$PRLSDKLIB" \
 	VM_NAME="$VM_NAME" \
 	INSTALL_COMMAND='"/Volumes/Image Volume/install"' \
-	python3 "$(dirname "$0")"/startinstall.py; then
+	"$PYTHON3" "$(dirname "$0")"/startinstall.py; then
 	echo 'Unable to start macOS installation.' >&2
 	exit 1
 fi
 echo 'Waiting for installation to complete...' >"$VERBOSEOUT"
 sshIsRunning() {
-	if [ -n "$VM_IPADDRESS" ]; then
-		waitForNetwork
-	fi
 	# returns error if not connectable, including
 	# if the hostname is not found
 	nc -z "$VM_IPADDRESS" 22 >"$DEBUGOUT" 2>&1
 }
-waitForSsh() {
+getTime() {
+	date +%s
+}
+waitForInstallation() {
+	starttime="$(getTime)"
+	maxtime="$((4 * 60 * 60))" # 4 hours, in seconds
 	until sshIsRunning; do
+		time="$(getTime)"
+		if [ -z "$starttime" ] || [ -z "$time" ]; then
+			echo "Error: Unable to get the installation time" >&2
+			return 1
+		fi
+		if [ "$((time - starttime))" -ge "$maxtime" ]; then
+			echo "Error: Timed out; VM never made SSH accessible" >&2
+			return 1
+		fi
 		sleep 5
 	done
 }
+login_message="mkmacvm login success"
 waitForSshKey() {
-	# Use -t here to allocate a terminal so it's logged in system.log and the
-	# installer program can tell that we logged on
-	until {
-		sudo -u "$USERNAME" \
-			ssh -t -o StrictHostKeyChecking=no \
-			-o ConnectTimeout=5 "$VM_HOSTNAME" \
-			true
-	} >"$DEBUGOUT" 2>&1; do
-		sleep 5
+	tries=30
+	success=""
+	while [ 0 -lt "$tries" ] && [ -z "$success" ]; do
+		if sudo -u "$USERNAME" \
+			ssh \
+			-q \
+			-F none \
+			-o StrictHostKeyChecking=no \
+			-o ConnectTimeout=5 \
+			-o ChallengeResponseAuthentication=no \
+			-o PasswordAuthentication=no \
+			-o UserKnownHostsFile=/dev/null \
+			-i "$keyfile" \
+			"$VM_HOSTNAME" \
+			"syslog -s -l notice '$login_message'"; then
+			success=yes
+		else
+			tries="$((tries - 1))"
+			sleep 5
+		fi
 	done
+	if [ -z "$success" ]; then
+		echo "Unable to connect to virtual machine via SSH" >&2
+		return 1
+	fi
 }
-waitForSsh # which ensures the hostname is found and has port 22 open
+waitForInstallation || exit 1 # which actually ensures the hostname is found and has port 22 open
 echo "Setting up local ssh access..." >"$VERBOSEOUT"
-{ sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT"
-waitForSshKey
+waitForSshKey || exit 1
 
 echo "Shutting down the virtual machine..." >"$VERBOSEOUT"
 while vmIsRunning; do
 	sleep 5
 done
-{ sudo -u "$USERNAME" prlctl set "$VM_NAME" --startup-view window; } >"$DEBUGOUT"
 
 echo "" >"$VERBOSEOUT"
 echo "********************************************" >"$VERBOSEOUT"

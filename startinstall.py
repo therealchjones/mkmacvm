@@ -194,10 +194,11 @@ if runstate != prlsdkapi.consts.VMS_RUNNING:
     raise RuntimeError(
         "Virtual machine '{}' is not running".format(vm.get_name()))
 io.connect_to_vm(vm).wait()
+# TODO #47: Make these respond to changes instead of sleep/wait
 sendEnter(vm, io)
-sleep(5)
+sleep(15)
 sendCmdShiftT(vm, io)
-sleep(5)
+sleep(15)
 sendCommand(vm, io, INSTALL_COMMAND)
 io.disconnect_from_vm(vm)
 prlsdkapi.deinit_sdk()

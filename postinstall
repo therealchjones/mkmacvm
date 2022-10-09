@@ -74,15 +74,17 @@ if [ ! -d "$USER_HOME" ]; then
 fi
 
 echo Looking for SSH keys... >"$VERBOSEOUT"
-if [ -r "$SCRIPTDIR"/id_ecdsa.pub ]; then
-	echo Installing SSH keys... >"$VERBOSEOUT"
-	USER_SSH="$USER_HOME"/.ssh
-	mkdir -p "$USER_SSH"
-	cp "$SCRIPTDIR"/id_ecdsa.pub "$USER_SSH"/authorized_keys
-	chmod 0600 "$USER_SSH"/authorized_keys
-	chmod 0700 "$USER_SSH"
-	chown -R "$USERNAME" "$USER_SSH"
-fi
+for file in "$SCRIPTDIR"/id_*.pub; do
+	if [ -r "$file" ]; then
+		echo Installing SSH key "$(basename "$file")" >"$VERBOSEOUT"
+		USER_SSH="$USER_HOME"/.ssh
+		mkdir -p "$USER_SSH"
+		cat "$file" >>"$USER_SSH"/authorized_keys
+		chmod 0600 "$USER_SSH"/authorized_keys
+		chmod 0700 "$USER_SSH"
+		chown -R "$USERNAME" "$USER_SSH"
+	fi
+done
 
 echo Disabling setup assistant... >"$VERBOSEOUT"
 /usr/bin/touch /private/var/db/.AppleSetupDone
@@ -109,13 +111,35 @@ until [ -n "$ipaddress" ]; do
 			| sed 's/^[[:space:]]*inet[[:space:]]+\([\.0-9]+\)[[:space:]]+.*$/\1/'
 	)"
 done
+tries=120
 until softwareupdate -i -r >"$DEBUGOUT" 2>&1; do
+	echo "Checking again for updates" >"$VERBOSEOUT"
+	tries="$((tries - 1))"
+	if [ 0 -ge "$tries" ]; then
+		echo "Error: timed out checking for updates" >&2
+		break
+	fi
 	sleep 5
 done
 
 echo Starting the SSH server... >"$VERBOSEOUT"
 launchctl load -w /System/Library/LaunchDaemons/ssh.plist
-until grep "sshd: $USERNAME" /var/log/system.log >$DEBUGOUT 2>&1; do
+login_message="mkmacvm login success"
+loginSuccess() {
+	if log show --no-pager --last 1h --style compact --predicate "composedMessage CONTAINS '$login_message'" \
+		| grep "$login_message$" >"$DEBUGOUT" 2>&1; then
+		return 0
+	else
+		return 1
+	fi
+}
+tries=30
+until loginSuccess; do
+	tries="$((tries - 1))"
+	if [ 0 -ge "$tries" ]; then
+		echo "Error: timed out waiting for mkmacvm to log in to the new VM" >&2
+		break
+	fi
 	sleep 5
 done
 
