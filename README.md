@@ -25,6 +25,20 @@ Additionally, mkmacvm requires a working `python3` in the path.
 
 2. There is no step 2.
 
+## Options
+
+Very limited options are available for customization of the virtual machine created by mkmacvm. These are set via environment variables. If the value of the variable is `Y`, then the option is enabled; if it is anything else the option is disabled. These are most easily included on the command line along with the mkmacvm command itself. For example:
+
+```
+sudo PASSWORDLESS_SUDO=Y ./mkmacvm
+```
+
+### Available options
+
+#### `PASSWORDLESS_SUDO`
+
+Enable the primary (non-root) user to have access to all sudo commands without using their password. Ideal for environments intended to be accessed noninteractively.
+
 ## Aims
 
 mkmacvm will provide a simple program that creates a macOS virtual machine on

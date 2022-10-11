@@ -113,6 +113,13 @@ until softwareupdate -i -r >"$DEBUGOUT" 2>&1; do
 	sleep 5
 done
 
+if [ "${PASSWORDLESS_SUDO:=}" = Y ]; then
+	echo "Enabling passwordless sudo..." >"$VERBOSEOUT"
+	if ! echo "$USERNAME"' ALL = (ALL) NOPASSWD: ALL' >/etc/sudoers.d/chjones; then
+		echo "Error: Unable to enable passwordless sudo" >&2
+	fi
+fi
+
 echo Starting the SSH server... >"$VERBOSEOUT"
 launchctl load -w /System/Library/LaunchDaemons/ssh.plist
 until grep "sshd: $USERNAME" /var/log/system.log >$DEBUGOUT 2>&1; do

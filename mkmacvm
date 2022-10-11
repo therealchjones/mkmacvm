@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Options: set to Y (case sensitive) to include, anything else to omit
+PASSWORDLESS_SUDO="${PASSWORDLESS_SUDO-N}"
+
 MACOS_VERSION="12.6"
 INSTALLER="Install macOS Monterey"
 VM_NAME="macvm"
@@ -520,6 +523,7 @@ cat >"$PACKAGEBUILD_DIR"/config.sh <<-EOF
 	USERNAME="$USERNAME"
 	USERREALNAME="$USERREALNAME"
 	SHADOW="$SHADOW"
+	PASSWORDLESS_SUDO="$PASSWORDLESS_SUDO"
 EOF
 
 echo "Creating post-installation configuration package..." >"$VERBOSEOUT"
