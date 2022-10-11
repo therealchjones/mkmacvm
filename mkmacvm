@@ -624,7 +624,7 @@ waitForSshKey() {
 }
 waitForSsh # which ensures the hostname is found and has port 22 open
 echo "Setting up local ssh access..." >"$VERBOSEOUT"
-{ sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT"
+{ sudo -u "$USERNAME" ssh-keygen -R "$VM_HOSTNAME"; } >"$DEBUGOUT" 2>&1 || true
 waitForSshKey
 
 echo "Shutting down the virtual machine..." >"$VERBOSEOUT"
