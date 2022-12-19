@@ -3,8 +3,8 @@
 # Options: set to Y (case sensitive) to include, anything else to omit
 PASSWORDLESS_SUDO="${PASSWORDLESS_SUDO-N}"
 
-MACOS_VERSION="12.6"
-INSTALLER="Install macOS Monterey"
+MACOS_VERSION="13.1"
+INSTALLER="Install macOS Ventura"
 VM_NAME="macvm"
 VM_HOSTNAME="macvm.shared"
 
@@ -300,7 +300,7 @@ cleanup() {
 			fi
 			waitForVmShutdown
 		fi
-		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >$DEBUGOUT 2>&1; then
+		if { sudo -u "$USERNAME" prlctl status "$VM_NAME"; } >"$DEBUGOUT" 2>&1; then
 			echo "Removing installation disk image from virtual machine..." >"$VERBOSEOUT"
 			if ! { sudo -u "$USERNAME" prlctl set "$VM_NAME" --device-set cdrom0 --image ""; } >"$DEBUGOUT"; then
 				echo "Unable to remove installation disk image from virtual machine." >&2
@@ -564,6 +564,11 @@ mv "$MKMACVM_TEMPDIR/$INSTALLER_IMAGENAME.dmg" "$VM_HOME"
 		--device-set "cdrom0" \
 		--image "$VM_HOME/$INSTALLER_IMAGENAME".dmg \
 		--connect
+} >"$DEBUGOUT"
+{
+	sudo -u "$USERNAME" prlctl set "$VM_NAME" \
+		--device-set "net0" \
+		--adapter-type "virtio"
 } >"$DEBUGOUT"
 
 echo "Starting virtual machine..." >"$VERBOSEOUT"
